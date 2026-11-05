@@ -159,7 +159,7 @@ sutra --resume "What did you change?"
 
 ### Inside a session
 
-Type `/` to open the command palette. ↑↓ selects a command and Enter runs it. Commands marked **▾** (`/model`, `/permissions`, `/budget`, `/sessions`, `/resume`) open a dropdown of real choices instead: the current value is pre-selected, typing narrows the list, and Enter applies the one you pick. You can also type a value directly, like `/budget 3.5` or `/model my-model-id`. Esc closes any list.
+Type `/` to open the command palette. ↑↓ selects a command and Enter runs it. Commands marked **▾** (`/model`, `/permissions`, `/budget`, `/sessions`, `/resume`, `/plan`, `/export`) open a dropdown of real choices instead: the current value is pre-selected, typing narrows the list, and Enter applies the one you pick. You can also type a value directly, like `/budget 3.5` or `/model my-model-id`. Esc closes any list.
 
 | Command | |
 | --- | --- |
@@ -167,7 +167,9 @@ Type `/` to open the command palette. ↑↓ selects a command and Enter runs it
 | `/status` | Model, workspace, permission profile, context size, instruction files |
 | `/cost` | Tokens, requests, tool calls, latency and estimated spend |
 | `/budget 0.50` | Set a spend limit for this session (`/budget off` removes it) |
-| `/plan` | Sutra's current plan for a multi-step task |
+| `/plan <task>` | **Plan mode:** Sutra investigates read-only and proposes a plan; nothing is changed until you approve |
+| `/plan go` | Approve the current plan and carry it out |
+| `/plan` | Show the current plan and its progress |
 | `/model [id]` | Show or switch the model |
 | `/permissions [profile]` | Show or switch the permission profile |
 | `/compact` | Summarise older context now, to save tokens |
@@ -178,6 +180,8 @@ Type `/` to open the command palette. ↑↓ selects a command and Enter runs it
 | `/exit` | Quit |
 
 **Keys.** `Enter` sends. `⇧ Enter` adds a new line. `Esc` stops the current turn: running commands are killed and nothing is left half-recorded. `Ctrl+C` twice exits. `↑` `↓` browse your previous prompts. You can type while Sutra is working; your message is queued and sent when the turn finishes.
+
+**Plan first, then act.** For bigger changes, start with `/plan add rate limiting to the API`. Sutra explores the code and records a step-by-step plan, and it can't modify anything while doing so: every write and command is refused by Sutra itself, not just discouraged. Review the plan, reply with changes if you want them, then `/plan go` to carry it out. Progress shows as ✓ / ◐ / ○ in the thread and in `/plan`.
 
 ## Staying in control
 

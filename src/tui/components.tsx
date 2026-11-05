@@ -17,7 +17,7 @@ export interface UiOptions {
 }
 
 /** Colour helper: returns undefined (terminal default) when colour is off. */
-const col = (ui: UiOptions, c: string | undefined) => (ui.color ? c : undefined);
+export const col = (ui: UiOptions, c: string | undefined) => (ui.color ? c : undefined);
 
 /** Usable content width: the terminal minus Sutra's 2-column gutters, capped for readability. */
 export function useContentWidth(): number {
@@ -25,7 +25,7 @@ export function useContentWidth(): number {
   return Math.max(40, Math.min(columns || 80, 124) - 4);
 }
 
-function truncate(s: string, max: number): string {
+export function truncate(s: string, max: number): string {
   if (max <= 1) return "";
   if (stringWidth(s) <= max) return s;
   let out = "";
@@ -184,7 +184,7 @@ export function UserLine(props: { ui: UiOptions; text: string }) {
   );
 }
 
-export function TurnHeading(props: { ui: UiOptions; turn: number }) {
+export function TurnHeading(props: { ui: UiOptions; turn: number; plan?: boolean }) {
   const { ui } = props;
   return (
     <Box marginTop={1}>
@@ -193,6 +193,15 @@ export function TurnHeading(props: { ui: UiOptions; turn: number }) {
           Sutra
         </Text>
         <Text color={col(ui, ui.theme.muted)}>{"  /  turn " + props.turn}</Text>
+        {props.plan ? (
+          <>
+            <Text color={col(ui, ui.theme.muted)}>{"  ·  "}</Text>
+            <Text color={col(ui, ui.theme.info)} bold>
+              plan mode
+            </Text>
+            <Text color={col(ui, ui.theme.muted)}> — read-only, nothing will be changed</Text>
+          </>
+        ) : null}
       </Text>
     </Box>
   );

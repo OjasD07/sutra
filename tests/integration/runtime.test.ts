@@ -282,3 +282,38 @@ describe("agent runtime", () => {
     expect(provider.requests).toHaveLength(2);
   });
 });
+
+describe("plan mode", () => {
+  let hp: Harness | undefined;
+  afterEach(() => {
+    hp?.cleanup();
+    hp = undefined;
+  });
+
+  it("lets the model read and plan, but refuses every change or command", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: "read_file", args: { path: "a.txt" } }] },
+      {
+        toolCalls: [
+          { name: "write_file", args: { path: "a.txt", content: "changed" } },
+          { name: "execute_command", args: { command: "ls" } },
+          { name: "update_plan", args: { steps: [{ title: "Edit a.txt", status: "pending" }, { title: "Run tests", status: "pending" }] } },
+        ],
+      },
+      { content: "Plan: edit a.txt, then run tests." },
+    ]);
+    hp = createHarness({ provider, files: { "a.txt": "original\n" }, approve: () => "once" });
+    const r = await hp.session.runtime.runTurn("make a.txt better", undefined, { mode: "plan" });
+    expect(r).toMatchObject({ status: "completed", mode: "plan", filesChanged: [] });
+    expect(readFileSync(join(hp.workspace, "a.txt"), "utf8")).toBe("original\n");
+    expect(hp.approvals).toHaveLength(0); // refused before any approval prompt
+    const tools = toolMessages(hp.session.context.messages());
+    expect(tools[1]!.content).toMatch(/Plan mode/);
+    expect(tools[2]!.content).toMatch(/Plan mode/);
+    expect(tools[3]!.content).toContain("Plan updated");
+    expect(hp.session.plan.get()!.steps).toHaveLength(2);
+    // The model is told why: the stored request carries the plan-mode instruction.
+    const firstUser = provider.requests[0]!.messages.find((m) => m.role === "user") as { content: string };
+    expect(firstUser.content).toMatch(/^\[Sutra plan mode\][\s\S]*make a\.txt better$/);
+  });
+});

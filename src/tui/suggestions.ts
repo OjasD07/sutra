@@ -41,7 +41,7 @@ export interface SuggestionContext {
 }
 
 /** Commands whose value can be picked from a list. */
-export const PICKABLE = new Set(["model", "permissions", "budget", "sessions", "resume", "export"]);
+export const PICKABLE = new Set(["model", "permissions", "budget", "sessions", "resume", "export", "plan"]);
 
 const BUDGET_PRESETS = [0.25, 0.5, 1, 2, 5, 10];
 
@@ -134,6 +134,14 @@ function choices(cmd: string, query: string, ctx: SuggestionContext): Suggestion
       if (matches(query, "off", "none", "remove"))
         items.push({ key: "off", label: "off", hint: "remove the limit", submit: "/budget off", ...(ctx.budgetUsd === undefined ? { current: true } : {}) });
       return { kind: "choices", title: ctx.budgetUsd ? `Session budget (now $${ctx.budgetUsd.toFixed(2)}) · or type an amount` : "Session budget · or type an amount", items };
+    }
+    case "plan": {
+      const items: Suggestion[] = [];
+      if (query && !/^go$/i.test(query))
+        items.push({ key: `task:${query}`, label: "plan this", hint: query.length > 60 ? query.slice(0, 59) + "…" : query, submit: `/plan ${query}` });
+      if (matches(query, "go")) items.push({ key: "go", label: "go", hint: "approve the current plan and carry it out", submit: "/plan go" });
+      if (!query) items.push({ key: "show", label: "show", hint: "show the current plan", submit: "/plan" });
+      return { kind: "choices", title: query ? "Plan" : "Plan · or type a task to plan it read-only first", items };
     }
     case "export": {
       const items: Suggestion[] = [

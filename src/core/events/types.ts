@@ -17,8 +17,12 @@ export type AgentStatus =
 
 export type TerminalStatus = Extract<AgentStatus, "completed" | "failed" | "cancelled" | "budget_exceeded">;
 
+export type TurnMode = "normal" | "plan";
+
 export interface TurnResult {
   status: TerminalStatus;
+  /** "plan": the turn could only read and plan; nothing was changed. */
+  mode: TurnMode;
   reason?: string;
   iterations: number;
   toolCalls: number;
@@ -43,7 +47,7 @@ export interface ApprovalRequest {
 /** Every event corresponds to something that actually happened in the runtime. */
 export type AgentEvent =
   | { type: "status"; status: AgentStatus }
-  | { type: "turn_start"; turn: number; input: string }
+  | { type: "turn_start"; turn: number; input: string; mode: TurnMode }
   | { type: "inference_start"; iteration: number; estimatedInputTokens: number }
   | { type: "text_delta"; text: string }
   | { type: "reasoning_progress"; chars: number }

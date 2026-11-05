@@ -13,7 +13,11 @@ import type { FileStateTracker } from "../../tools/file-state.js";
 import type { ToolRegistry } from "../../tools/registry.js";
 import { ToolFailure, fail, type Tool, type ToolContext, type ToolResult } from "../../tools/types.js";
 import { oneLine, truncateMiddle } from "../../utils/text.js";
-import type { AgentEvent, AgentListener, AgentStatus, ApprovalRequest, TerminalStatus, TurnResult } from "../events/types.js";
+import type { AgentEvent, AgentListener, AgentStatus, ApprovalRequest, TerminalStatus, TurnMode, TurnResult } from "../events/types.js";
+
+/** Prepended to the user's request in plan mode (stored in history so the model knows why writes are refused). */
+export const PLAN_MODE_PREFIX =
+  "[Sutra plan mode] Investigate as much as you need with read-only tools, then call update_plan with concrete, verifiable steps (files to change, how each step will be checked) and reply with a short summary of the approach and any open questions. Do not modify files or run commands: the harness refuses them until the user approves the plan.";
 import type { PlanStore } from "../planning/plan.js";
 import { LoopDetector } from "./loop-detector.js";
 import type { SandboxStatus } from "../../sandbox/sandbox.js";
@@ -97,6 +101,7 @@ export class AgentRuntime {
   private sessionCommands: { command: string; exitCode: number | null }[] = [];
   private recentErrors: string[] = [];
   model: string;
+  private mode: TurnMode = "normal";
 
   constructor(private readonly d: RuntimeDeps) {
     this.model = d.config.model!;
@@ -154,10 +159,16 @@ export class AgentRuntime {
 
   // ------------------------------------------------------------------ turn
 
-  async runTurn(input: string, signal?: AbortSignal): Promise<TurnResult> {
+  /**
+   * Run one user turn. In plan mode the model may read the workspace and call
+   * update_plan, but every file change and command is refused by the harness;
+   * the user reviews the plan before anything happens.
+   */
+  async runTurn(input: string, signal?: AbortSignal, opts: { mode?: TurnMode } = {}): Promise<TurnResult> {
     if (this.running) throw new Error("A turn is already running");
     this.running = true;
     this.turn++;
+    this.mode = opts.mode ?? "normal";
     const ac = new AbortController();
     const onAbort = () => ac.abort();
     if (signal?.aborted) ac.abort();
@@ -178,14 +189,14 @@ export class AgentRuntime {
       lengthContinuations: 0,
     };
     this.loop.reset();
-    this.emit({ type: "turn_start", turn: this.turn, input });
+    this.emit({ type: "turn_start", turn: this.turn, input, mode: this.mode });
 
     try {
       const over = this.budgetExceeded();
       if (over) return this.finish(st, "budget_exceeded", over);
       if (this.d.store && this.turn === 1 && !this.d.store.getSession(this.d.sessionId)?.title)
         this.d.store.updateSession(this.d.sessionId, { title: oneLine(input, 80) });
-      this.append({ role: "user", content: input });
+      this.append({ role: "user", content: this.mode === "plan" ? `${PLAN_MODE_PREFIX}\n\n${input}` : input });
       this.d.store?.updateSession(this.d.sessionId, { status: "running" });
       return await this.loopTurn(st, ac.signal);
     } catch (err) {
@@ -411,6 +422,12 @@ export class AgentRuntime {
       return;
     }
     p.summary = req.summary;
+    if (this.mode === "plan" && (tool.category === "write" || tool.category === "execute")) {
+      p.outcome = "denied";
+      p.deniedBy = "policy";
+      p.result = fail("permission_denied", "Plan mode: nothing may be changed or run until the user approves the plan. Record the step in update_plan instead.");
+      return;
+    }
     const decision = this.d.permissions.evaluate(req);
     p.allowNetwork = this.d.config.sandbox.network || !!decision.command?.network;
     const previewCtx = this.toolContext(p.call.id, signal, p.allowNetwork);
@@ -620,6 +637,7 @@ export class AgentRuntime {
     const t = this.d.usage.totals;
     const result: TurnResult = {
       status,
+      mode: this.mode,
       ...(reason ? { reason } : {}),
       iterations: st.iterations,
       toolCalls: st.toolCalls,

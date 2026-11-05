@@ -62,7 +62,7 @@ describe("tool registry", () => {
     expect(read.schema.safeParse({ path: "a" }).success).toBe(true);
     expect(read.schema.safeParse({}).success).toBe(false);
     expect(read.schema.safeParse({ path: "a", offset: 0 }).success).toBe(false);
-    expect(registry.get("update_plan")!.schema.safeParse({ steps: [{ title: "x", status: "done" }] }).success).toBe(false);
+    expect(registry.get("update_plan")!.schema.safeParse({ steps: [{ title: "x", status: "maybe" }] }).success).toBe(false);
     expect(registry.get("git_diff")!.schema.safeParse({ ref: "--output=/tmp/x" }).success).toBe(false);
   });
 
@@ -245,7 +245,23 @@ describe("plan tool", () => {
     const ok = await call("update_plan", { steps: [{ title: "a", status: "completed" }, { title: "b", status: "active" }] }, c);
     expect(ok.output).toContain("[x] 1. a");
     expect(ok.output).toContain("[>] 2. b");
-    const bad = await call("update_plan", { steps: [{ title: "a", status: "active" }, { title: "b", status: "active" }] }, c);
-    expect(bad.ok).toBe(false);
+    // A second "active" step is demoted rather than failing the call.
+    const two = await call("update_plan", { steps: [{ title: "a", status: "active" }, { title: "b", status: "active" }] }, c);
+    expect(two.ok).toBe(true);
+    expect(two.output).toContain("[>] 1. a");
+    expect(two.output).toContain("[ ] 2. b");
+  });
+
+  it("accepts the status names and step shapes models actually send", async () => {
+    // A real DeepSeek session's first update_plan call used "in_progress" and was rejected.
+    const c = ctx(workspace({}));
+    const r = await call(
+      "update_plan",
+      { steps: [{ title: "a", status: "done" }, { step: "b", status: "in_progress" }, { content: "c", status: "todo" }, "d", { title: "e", state: "failed", note: "no network" }] },
+      c,
+    );
+    expect(r.ok).toBe(true);
+    expect(c.plan.get()!.steps.map((s) => s.status)).toEqual(["completed", "active", "pending", "pending", "blocked"]);
+    expect(c.plan.get()!.steps.map((s) => s.title)).toEqual(["a", "b", "c", "d", "e"]);
   });
 });

@@ -3,7 +3,9 @@ import type { PermissionProfile, SutraConfig } from "../config/schema.js";
 import type { SessionHandle } from "../core/session.js";
 import type { SessionStore } from "../memory/store.js";
 import type { ModelProvider } from "../providers/types.js";
-import { formatUsd, type UsageTotals } from "../telemetry/cost.js";
+import { formatUsd, isPeak, type UsageTotals } from "../telemetry/cost.js";
+import type { ModelPrice } from "../config/schema.js";
+import type { Plan } from "../core/planning/plan.js";
 import { sandboxSummary } from "../sandbox/sandbox.js";
 import { exportAudit } from "./audit-command.js";
 
@@ -15,12 +17,53 @@ export interface CommandContext {
   signal?: AbortSignal;
 }
 
+export interface StatusData {
+  sessionId: string;
+  resumed: boolean;
+  workspace: string;
+  provider: string;
+  model: string;
+  contextWindow: number;
+  contextBudget: number;
+  contextTokens: number;
+  compactAt: number;
+  thinking: string | null;
+  profile: string;
+  sandbox: { active: boolean; text: string };
+  index: { files: number; symbols: number; mode: string } | null;
+  instructions: string[];
+  spendUsd: number;
+  costIncomplete: boolean;
+  budgetUsd?: number;
+}
+
+export interface CostData {
+  totals: UsageTotals;
+  model: string;
+  price?: ModelPrice;
+  peakNow: boolean;
+  budgetUsd?: number;
+}
+
+/** Rich views the terminal UI renders instead of the plain `output` text. */
+export type CommandView =
+  | { kind: "status"; data: StatusData }
+  | { kind: "cost"; data: CostData }
+  | { kind: "plan"; plan: Plan | null; hint: string };
+
 export interface CommandResult {
+  /** Plain-text form (non-interactive use, tests, no-colour fallback). */
   output: string;
-  action?: "exit" | "clear" | "resume";
+  view?: CommandView;
+  action?: "exit" | "clear" | "resume" | "run" | "plan";
   /** For action "resume": the session to switch to. */
   sessionId?: string;
+  /** For actions "run" / "plan": the prompt to send. */
+  text?: string;
 }
+
+const PLAN_HELP =
+  "Ask for a plan first with /plan <task>: Sutra investigates read-only, proposes steps, and changes nothing until you approve with /plan go.";
 
 export const COMMANDS: { name: string; args?: string; help: string }[] = [
   { name: "help", help: "Show commands and keys" },
@@ -28,7 +71,7 @@ export const COMMANDS: { name: string; args?: string; help: string }[] = [
   { name: "status", help: "Session, model, context and permission status" },
   { name: "cost", help: "Token usage and estimated spend" },
   { name: "budget", args: "[usd|off]", help: "Show or set the session spend limit" },
-  { name: "plan", help: "Show the current plan" },
+  { name: "plan", args: "[task|go]", help: "Plan a task read-only first, show the plan, or carry it out" },
   { name: "compact", help: "Summarise older context now" },
   { name: "clear", help: "Start a fresh session (history stays on disk)" },
   { name: "permissions", args: "[inspect|confirm|flow]", help: "Show or change the permission profile" },
@@ -113,10 +156,39 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
         `Instructions ${session.instructions.length ? session.instructions.map((i) => i.path).join(", ") : "none"}`,
         `Spend        ${formatCost(session.usage.totals)}`,
       ];
-      return { output: lines.join("\n") };
+      const stats = session.repoIndex?.index.stats;
+      const data: StatusData = {
+        sessionId: session.record.id,
+        resumed: session.resumed,
+        workspace: tildify(session.workspace.root),
+        provider: provider.displayName,
+        model: rt.model,
+        contextWindow: info.contextWindow,
+        contextBudget: session.context.budget.limit,
+        contextTokens: est,
+        compactAt: session.context.budget.threshold,
+        thinking: info.supportsThinking ? (config.thinking === "enabled" ? `on · effort ${config.reasoningEffort}` : "off") : null,
+        profile: session.permissions.policy.profile,
+        sandbox: { active: !!session.sandbox.runner, text: sandboxSummary(session.sandbox) },
+        index: stats ? { files: stats.files, symbols: stats.symbols, mode: session.repoIndex?.embeddingModel ? `BM25 + embeddings (${session.repoIndex.embeddingModel})` : "BM25" } : null,
+        instructions: session.instructions.map((i) => i.path),
+        spendUsd: session.usage.totals.costUsd,
+        costIncomplete: session.usage.totals.costIncomplete,
+        ...(config.budget.maxSessionCostUsd ? { budgetUsd: config.budget.maxSessionCostUsd } : {}),
+      };
+      return { output: lines.join("\n"), view: { kind: "status", data } };
     }
-    case "cost":
-      return { output: costReport(session.usage.totals, config, rt.model) };
+    case "cost": {
+      const price = config.pricing[rt.model];
+      const data: CostData = {
+        totals: { ...session.usage.totals },
+        model: rt.model,
+        ...(price ? { price } : {}),
+        peakNow: price ? isPeak(price, new Date()) : false,
+        ...(config.budget.maxSessionCostUsd ? { budgetUsd: config.budget.maxSessionCostUsd } : {}),
+      };
+      return { output: costReport(session.usage.totals, config, rt.model), view: { kind: "cost", data } };
+    }
     case "budget": {
       if (!arg) {
         const l = config.budget.maxSessionCostUsd;
@@ -131,8 +203,24 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
       config.budget.maxSessionCostUsd = v;
       return { output: `Session budget set to ${formatUsd(v)}.` };
     }
-    case "plan":
-      return { output: session.plan.render() };
+    case "plan": {
+      if (/^(go|approve|run|execute|start|yes)$/i.test(arg)) {
+        if (!session.plan.get()) return { output: `There is no plan to carry out yet. ${PLAN_HELP}` };
+        if (rt.isRunning) return { output: "Wait for the current turn to finish first." };
+        return { output: "", action: "run", text: "The plan is approved. Carry it out step by step, keeping update_plan current, and verify each step." };
+      }
+      if (arg) {
+        if (rt.isRunning) return { output: "Wait for the current turn to finish first." };
+        return { output: "", action: "plan", text: arg };
+      }
+      const plan = session.plan.get();
+      const hint = plan
+        ? plan.steps.every((s) => s.status === "completed")
+          ? "All steps are done. Start a new one with /plan <task>."
+          : "Carry it out with /plan go, or reply with changes to the plan."
+        : PLAN_HELP;
+      return { output: plan ? `${session.plan.render()}\n\n${hint}` : `No plan in this session yet. ${PLAN_HELP}`, view: { kind: "plan", plan, hint } };
+    }
     case "compact": {
       if (rt.isRunning) return { output: "Wait for the current turn to finish (or cancel it) before compacting." };
       const did = await rt.compact(true, ctx.signal);

@@ -2,7 +2,7 @@ import { Box, Static, Text, useApp, useInput } from "ink";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { runSlashCommand, tildify } from "../cli/commands.js";
 import type { SutraConfig } from "../config/schema.js";
-import type { AgentEvent, AgentStatus, ApprovalRequest, TurnResult } from "../core/events/types.js";
+import type { AgentEvent, AgentStatus, ApprovalRequest, TurnMode, TurnResult } from "../core/events/types.js";
 import type { Plan } from "../core/planning/plan.js";
 import type { SessionHandle } from "../core/session.js";
 import { t } from "../i18n/index.js";
@@ -35,6 +35,9 @@ import {
   type UiOptions,
 } from "./components.js";
 import { buildSuggestions } from "./suggestions.js";
+import { CostView, PlanView, StatusView } from "./views.js";
+import type { CommandView } from "../cli/commands.js";
+import { PLAN_MODE_PREFIX } from "../core/agent/runtime.js";
 import { sandboxSummary } from "../sandbox/sandbox.js";
 import { threadGlyphs } from "./theme.js";
 
@@ -57,12 +60,13 @@ interface ToolView {
 type Item =
   | { kind: "welcome"; id: number }
   | { kind: "user"; id: number; text: string }
-  | { kind: "heading"; id: number; turn: number }
+  | { kind: "heading"; id: number; turn: number; plan: boolean }
   | { kind: "assistant"; id: number; text: string; leadingPipe: boolean }
   | { kind: "tool"; id: number; view: ToolView }
   | { kind: "plan"; id: number; plan: Plan }
   | { kind: "notice"; id: number; level: "info" | "warn" | "error"; label?: string; text: string; hint?: string }
   | { kind: "output"; id: number; text: string }
+  | { kind: "view"; id: number; view: CommandView }
   | { kind: "turn"; id: number; result: TurnResult; budgetUsd?: number; sessionCostUsd: number };
 
 export interface AppProps {
@@ -178,7 +182,7 @@ function restoredItems(messages: Message[]): Item[] {
   for (const m of messages) {
     if (m.role === "user" && !m.content.startsWith("[Sutra:")) {
       flushTools();
-      items.push({ kind: "user", id: nextId++, text: m.content });
+      items.push({ kind: "user", id: nextId++, text: m.content.startsWith(PLAN_MODE_PREFIX) ? `/plan ${m.content.slice(PLAN_MODE_PREFIX.length).trim()}` : m.content });
       lastWasTool = false;
     } else if (m.role === "assistant") {
       if (m.content.trim()) {
@@ -217,6 +221,7 @@ export function App(props: AppProps) {
   const liveRef = useRef("");
   const lastKind = useRef<"tool" | "text" | "other">("other");
   const pendingPlan = useRef<Plan | null>(null);
+  const planModeRef = useRef(false);
   const turnNo = useRef(0);
   const now = useNow(busy);
   const frame = useSpinnerFrame(ui);
@@ -261,7 +266,8 @@ export function App(props: AppProps) {
         case "turn_start":
           turnNo.current = e.turn;
           lastKind.current = "other";
-          push({ kind: "heading", id: nextId++, turn: e.turn });
+          planModeRef.current = e.mode === "plan";
+          push({ kind: "heading", id: nextId++, turn: e.turn, plan: e.mode === "plan" });
           break;
         case "inference_start":
           setReasoning(0);
@@ -349,13 +355,23 @@ export function App(props: AppProps) {
   }, [session, push, notice, th, config]);
 
   const runTurn = useCallback(
-    async (text: string) => {
-      push({ kind: "user", id: nextId++, text });
+    async (text: string, mode: TurnMode = "normal", echo = true) => {
+      if (echo) push({ kind: "user", id: nextId++, text });
       const ac = new AbortController();
       abortRef.current = ac;
       setBusy(true);
       try {
-        await session.runtime.runTurn(text, ac.signal);
+        const r = await session.runtime.runTurn(text, ac.signal, { mode });
+        if (mode === "plan" && r.status === "completed") {
+          const plan = session.plan.get();
+          push({
+            kind: "view",
+            id: nextId++,
+            view: plan
+              ? { kind: "plan", plan, hint: "Nothing has been changed. Approve with /plan go, or reply with changes to the plan." }
+              : { kind: "plan", plan: null, hint: "The model answered without recording a plan. Ask it to write one, or run the task normally." },
+          });
+        }
       } catch (err) {
         notice("error", (err as Error).message);
       } finally {
@@ -372,7 +388,13 @@ export function App(props: AppProps) {
       push({ kind: "user", id: nextId++, text });
       try {
         const res = await runSlashCommand(text, { session, config, store, provider });
-        if (res.output) push({ kind: "output", id: nextId++, text: res.output });
+        if (res.view) push({ kind: "view", id: nextId++, view: res.view });
+        else if (res.output) push({ kind: "output", id: nextId++, text: res.output });
+        if ((res.action === "run" || res.action === "plan") && res.text) {
+          // The typed "/plan …" line is already shown; don't echo the generated prompt.
+          void runTurn(res.text, res.action === "plan" ? "plan" : "normal", false);
+          return;
+        }
         if (res.action === "exit") app.exit();
         if (res.action === "clear") {
           const next = props.newSession();
@@ -399,7 +421,7 @@ export function App(props: AppProps) {
         notice("error", (err as Error).message);
       }
     },
-    [session, config, store, provider, app, push, notice, props],
+    [session, config, store, provider, app, push, notice, props, runTurn],
   );
 
   const suggest = useCallback(
@@ -490,7 +512,7 @@ export function App(props: AppProps) {
       case "user":
         return <UserLine key={it.id} ui={ui} text={it.text} />;
       case "heading":
-        return <TurnHeading key={it.id} ui={ui} turn={it.turn} />;
+        return <TurnHeading key={it.id} ui={ui} turn={it.turn} plan={it.plan} />;
       case "assistant":
         return <AssistantBlock key={it.id} ui={ui} text={it.text} leadingPipe={it.leadingPipe} trailingPipe />;
       case "tool":
@@ -512,6 +534,12 @@ export function App(props: AppProps) {
         return (
           <Box key={it.id} paddingLeft={2} marginTop={1}>
             <Text>{it.text}</Text>
+          </Box>
+        );
+      case "view":
+        return (
+          <Box key={it.id} flexDirection="column">
+            {it.view.kind === "status" ? <StatusView ui={ui} data={it.view.data} /> : it.view.kind === "cost" ? <CostView ui={ui} data={it.view.data} /> : <PlanView ui={ui} plan={it.view.plan} hint={it.view.hint} />}
           </Box>
         );
       case "turn":
@@ -545,7 +573,7 @@ export function App(props: AppProps) {
     );
     footerRight = approval.req.decision.grantable ? "y / a / N" : "y / N";
   } else if (busy) {
-    const label = status === "thinking" ? (reasoning > 0 ? t("reasoning") : t("thinking")) : t("working");
+    const label = `${planModeRef.current ? "Planning · " : ""}${status === "thinking" ? (reasoning > 0 ? t("reasoning") : t("thinking")) : t("working")}`;
     footerLeft = (
       <>
         <Text color={ui.color ? th.accent : undefined}>

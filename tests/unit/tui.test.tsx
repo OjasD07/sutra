@@ -1,4 +1,5 @@
 import { render } from "ink-testing-library";
+import { join } from "node:path";
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { openSession } from "../../src/core/session.js";
@@ -98,8 +99,9 @@ describe("terminal UI", () => {
     expect(f).toContain("/compact");
     expect(f).toContain("2 matches · ↑↓ select");
     ui.stdin.write("\r");
-    await waitFor(() => all().includes("Session usage"));
-    expect(all()).toContain("Estimated cost");
+    await waitFor(() => all().includes("ESTIMATED COST"));
+    expect(all()).toContain("Sutra  /  cost");
+    expect(all()).toMatch(/Cache\s+-+\s+0%/);
     ui.unmount();
   });
 
@@ -269,5 +271,78 @@ describe("TUI helpers", () => {
     expect(parseTestCounts("===== 2 failed, 5 passed in 0.31s =====")).toEqual({ passed: 5, failed: 2, total: 7 });
     expect(parseTestCounts("test result: ok. 3 passed; 0 failed; 0 ignored")).toEqual({ passed: 3, failed: 0, total: 3 });
     expect(parseTestCounts("nothing here")).toBeNull();
+  });
+});
+
+describe("plan, status and cost views", () => {
+  it("/plan <task> plans read-only, shows the plan, and /plan go carries it out", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: "write_file", args: { path: "x.txt", content: "1" } }, { name: "update_plan", args: { steps: [{ title: "Create x.txt", status: "pending" }, { title: "Check it", status: "pending" }] } }] },
+      { content: "Here is the plan." },
+      { toolCalls: [{ name: "write_file", args: { path: "x.txt", content: "1" } }] },
+      { content: "Done." },
+    ]);
+    const { ui, all, harness } = mount(provider);
+    await tick();
+    await type(ui, "/plan create x.txt");
+    ui.stdin.write("\r");
+    await waitFor(() => all().includes("Approve with /plan go"));
+    const out = all();
+    expect(out).toContain("plan mode");
+    expect(out).toContain("read-only, nothing will be changed");
+    expect(out).toMatch(/⊘ write_file\s+x\.txt\s+blocked by policy/);
+    expect(out).toContain("Sutra  /  plan");
+    expect(out).toContain("0 of 2 done");
+    expect(out).toMatch(/○\s+1\. Create x\.txt/);
+    expect(out).toContain("› /plan create x.txt");
+    expect(out).not.toContain("Investigate as much as you need"); // internal instruction isn't echoed
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(harness.workspace, "x.txt"))).toBe(false);
+
+    await type(ui, "/plan go");
+    ui.stdin.write("\r");
+    await waitFor(() => ui.lastFrame()!.includes("APPROVE"));
+    ui.stdin.write("y");
+    await waitFor(() => all().includes("Done."));
+    expect(all()).not.toContain("The plan is approved. Carry it out"); // generated prompt isn't echoed
+    expect(existsSync(join(harness.workspace, "x.txt"))).toBe(true);
+    ui.unmount();
+  });
+
+  it("/plan with no plan explains how to start one", async () => {
+    const { ui, all } = mount(new ScriptedProvider([]));
+    await tick();
+    await type(ui, "/plan");
+    ui.stdin.write("\u001B"); // close the dropdown, run the bare command
+    await tick();
+    ui.stdin.write("\r");
+    await waitFor(() => all().includes("no plan yet"));
+    expect(all()).toContain("/plan add dark mode to the settings page");
+    ui.unmount();
+  });
+
+  it("/status renders a structured view", async () => {
+    const { ui, all } = mount(new ScriptedProvider([]));
+    await tick();
+    await type(ui, "/status");
+    ui.stdin.write("\r");
+    await waitFor(() => all().includes("Sutra  /  status"));
+    const out = all();
+    for (const label of ["Model", "Context", "Permission", "Sandbox", "Index", "Instructions", "Workspace", "Spend"]) expect(out).toContain(label);
+    expect(out).toMatch(/Permission\s+\* Confirm\s+writes and commands ask first/);
+    expect(out).toContain("no budget · /budget to set one");
+    ui.unmount();
+  });
+});
+
+describe("view helpers", () => {
+  it("formats compact numbers and bars", async () => {
+    const { compactNumber, bar } = await import("../../src/tui/views.js");
+    expect(compactNumber(1_048_576)).toBe("1M");
+    expect(compactNumber(167_232)).toBe("167K");
+    expect(compactNumber(2553)).toBe("2.6K");
+    expect(compactNumber(14)).toBe("14");
+    expect(bar(0.5, 10, false)).toBe("#####-----");
+    expect(bar(0.1, 10, false, 0.75)).toBe("#-------|-"); // tick marks the compaction threshold
   });
 });
