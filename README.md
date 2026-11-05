@@ -11,7 +11,7 @@
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-F5B84B?style=flat-square&labelColor=101923"></a>
   <img alt="Node.js 22.13+" src="https://img.shields.io/badge/node-%E2%89%A5%2022.13-52B788?style=flat-square&labelColor=101923">
   <img alt="Status: early preview" src="https://img.shields.io/badge/status-early%20preview-6CA8E8?style=flat-square&labelColor=101923">
-  <img alt="Models: DeepSeek, Ollama, OpenAI-compatible" src="https://img.shields.io/badge/models-DeepSeek%20%C2%B7%20Ollama%20%C2%B7%20OpenAI--compatible-9CAABA?style=flat-square&labelColor=101923">
+  <img alt="Models: DeepSeek, OpenRouter, 20+ providers, local" src="https://img.shields.io/badge/models-DeepSeek%20%C2%B7%20OpenRouter%20%C2%B7%2020%2B%20providers%20%C2%B7%20local-9CAABA?style=flat-square&labelColor=101923">
 </p>
 
 <p align="center">
@@ -26,6 +26,14 @@
   <a href="docs/">Docs</a>
 </p>
 
+```bash
+npm install -g github:cneuralnetwork/sutra
+sutra init     # pick a provider, paste a key, choose a model
+sutra          # start in any project
+```
+
+<p align="center"><sub>Node.js 22.13+ on macOS or Linux · works with DeepSeek, OpenRouter, OpenAI, Anthropic, Gemini, Groq and 15 more, or local models through Ollama and LM Studio</sub></p>
+
 ---
 
 **Sutra** (सूत्र, Sanskrit for *thread* or *guiding principle*) is a coding agent that works in your terminal. You describe a task. Sutra explores the repository, plans, edits files, runs your tests, and keeps going until the task is done, or until it needs you.
@@ -36,7 +44,7 @@ Three ideas shape it:
 - **You stay in charge.** Sutra itself decides what may run without asking, and on macOS and Linux every command also runs inside an OS sandbox. A clever prompt or a malicious file can't talk its way past either.
 - **You know what it costs.** Token usage and estimated spend are tracked per request, a budget can pause the agent before it overspends, and a built-in benchmark measures cost per solved task.
 
-Sutra works with [DeepSeek](https://api-docs.deepseek.com/) in the cloud, with **local models through [Ollama](https://ollama.com)** (free and private), and with any OpenAI-compatible server: vLLM, LM Studio, llama.cpp, OpenRouter or OpenAI itself.
+Sutra works with [DeepSeek](https://api-docs.deepseek.com/), **[OpenRouter](https://openrouter.ai)** (hundreds of models behind one key), OpenAI, Anthropic, Google Gemini, xAI, Mistral, Groq, Cerebras, Together, Fireworks, DeepInfra, Moonshot, Z.ai, Qwen, SambaNova, Hugging Face and Vercel AI Gateway, with **local models** through Ollama, LM Studio, llama.cpp, vLLM or Jan (free and private), and with any other OpenAI-compatible server.
 
 ## See it work
 
@@ -91,7 +99,16 @@ How to read it: each turn is one **thread**. Sutra's explanations sit on the `�
 
 ## Quick start
 
-**1. Install.** You need Node.js 22.13 or newer, on macOS or Linux. `ripgrep` is optional and makes search faster.
+**1. Install.** You need Node.js 22.13 or newer (`node -v`), on macOS or Linux. `ripgrep` is optional and makes search faster.
+
+```bash
+npm install -g github:cneuralnetwork/sutra
+```
+
+This builds Sutra from this repository and puts the `sutra` command on your PATH. Update later by running the same command again.
+
+<details>
+<summary>Install from source instead (for contributing)</summary>
 
 ```bash
 git clone https://github.com/cneuralnetwork/sutra.git
@@ -101,29 +118,57 @@ npm run build
 npm link        # puts the `sutra` command on your PATH
 ```
 
+</details>
+
 **2. Connect a model.** Run the guided setup:
 
 ```bash
 sutra init
 ```
 
-It asks which provider you want and lists the models your server actually has. If the provider needs a key, it stores it safely (more below). It then checks the connection and, only if you say yes, sends one tiny test request.
+```
+  ? Model provider  type to filter
+    RECOMMENDED
+  ❯ DeepSeek              Fast, cheap and strong at code; Sutra's tuned default
+    OpenRouter            Hundreds of models from every lab behind one key       key in $OPENROUTER_API_KEY
+    CLOUD PROVIDERS
+    OpenAI                GPT models on the OpenAI platform
+    Anthropic             Claude models, through Anthropic's OpenAI-compatible endpoint
+    …
+    ON THIS MACHINE (NO KEY, PRIVATE)
+    Ollama                Local models, private and free                         ● running · 4 models
+```
 
-You can also skip setup and use flags or environment variables:
+Pick a provider (type to filter, arrow keys to move). Setup spots keys already in your environment and local model servers that are running. It checks a pasted key straight away and asks again if the provider rejects it. Then it lists the models the provider actually offers, with context size and price where published, and checks that the model you pick can really call a tool. The whole thing takes about a minute.
+
+<details>
+<summary>Skip the wizard: flags and environment variables</summary>
+
 
 | Provider | How |
 | --- | --- |
 | **DeepSeek** (cloud) | `export DEEPSEEK_API_KEY=sk-...` — get a key from the [DeepSeek platform](https://platform.deepseek.com/api_keys) |
 | **Ollama** (local, free) | `ollama pull qwen3-coder`, then `sutra --provider ollama` |
-| **Any OpenAI-compatible server** | `export OPENAI_BASE_URL=http://localhost:8000/v1` (plus `OPENAI_API_KEY` if it needs one), then `sutra --provider openai-compatible --model <id>` |
+| **OpenRouter** and other clouds | `export OPENROUTER_API_KEY=...`, then `sutra --provider openrouter --model deepseek/deepseek-chat`. Likewise `anthropic` (`ANTHROPIC_API_KEY`), `gemini` (`GEMINI_API_KEY`), `groq`, `mistral`, `xai`, … ([all providers](docs/configuration.md#providers)) |
+| **LM Studio, llama.cpp, vLLM, Jan** (local) | start the server, then `sutra --provider lmstudio` (or `llamacpp`, `vllm`, `jan`) |
+| **Any other OpenAI-compatible server** | `export OPENAI_BASE_URL=http://localhost:8000/v1` (plus `OPENAI_API_KEY` if it needs one), then `sutra --provider openai-compatible --model <id>` |
+
+</details>
 
 > [!TIP]
 > Ollama's default context window is small and it **silently cuts off** longer prompts. For coding work, start the server with `OLLAMA_CONTEXT_LENGTH=32768 ollama serve` (or more), and set `providers.ollama.contextWindow` to the same number. Smaller local models also handle multi-step tool use less reliably than large cloud models, and `sutra bench` will tell you how yours does.
 
-**3. Try it on the example.**
+**3. Give it a task.** In any project:
 
 ```bash
-cd examples/session-expiry
+cd your-project
+sutra "explain how this repository is organised"
+```
+
+Sutra asks before it changes a file or runs a command, so a first run is safe. To watch it fix a real bug, try the bundled example:
+
+```bash
+git clone https://github.com/cneuralnetwork/sutra.git && cd sutra/examples/session-expiry
 npm test                                   # 2 of 4 tests fail
 sutra "The session tests fail. Find and fix the bug."
 ```
@@ -150,7 +195,7 @@ sutra --resume "What did you change?"
 | `sutra -p "summarise src/auth"` | Run once without the UI: the answer goes to stdout, activity to stderr |
 | `sutra -p --json "…"` | Same, but print every runtime event as a JSON line |
 | `sutra --readonly` | Look, don't touch: no edits, no commands |
-| `sutra --provider ollama` | Use a local model (`deepseek`, `ollama` or `openai-compatible`) |
+| `sutra --provider openrouter` | Use another provider (`sutra init` lists them all) |
 | `sutra replay` | Show the latest session here as a timeline |
 | `sutra export --format md` | Write an audit report of a session |
 | `sutra bench` | Run the benchmark tasks and report pass rate and cost |
@@ -257,7 +302,7 @@ What happens around a turn (details in [docs/quality-engine.md](docs/quality-eng
 
 On the bundled tasks with live DeepSeek, `balanced` solved 4/4 and its gate said "verified" on exactly those 4, for $0.0074 in total. In `deep` mode the verifier found a real boundary bug the project's tests didn't cover, and the agent fixed it. These tasks are too easy to show pass-rate gains: that needs a harder benchmark, which is the next step.
 
-An opt-in `--economy` experiment skips the contract, review and judge calls when a fresh full test run settles every criterion of a bug fix. On the same tasks it kept 4/4 verified, at $0.0055 instead of $0.0065 and 31 s instead of 46 s (one run each). Test-run deltas, re-read dedupe and the conditional map are described, with their measurements, in [docs/token-economy-implemented.md](docs/token-economy-implemented.md).
+An opt-in `--economy` experiment skips the contract, review and judge calls when a fresh full test run settles every criterion of a bug fix. On the same tasks it kept 4/4 verified, at $0.0055 instead of $0.0065 and 31 s instead of 46 s (one run each). Test-run deltas, re-read dedupe and the conditional map are described, with their measurements, in [docs/token-economy.md](docs/token-economy.md).
 
 ## Cost and budgets
 
@@ -327,8 +372,25 @@ Each task runs in a fresh copy of a small repository, with the Flow profile, in 
 
 The bundled suite has four tasks (a unit-conversion bug, off-by-one pagination, a CSV quoting bug, and implementing a function from its tests). You can add your own; see [docs/benchmarks.md](docs/benchmarks.md). Results are saved as JSON and as a Markdown table in `~/.sutra/bench/`.
 
+### Against other coding agents
+
+[`benchmarks/harnesses`](benchmarks/harnesses/README.md) runs the same tasks through Sutra, Claude Code, Codex CLI, Aider, OpenCode, Goose and Qwen Code on one model and key. A local proxy meters every request, so tokens and cost are measured the same way for all of them.
+
+First run, 5 November 2026, `deepseek-flash`, the 4 bundled tasks × 3 trials each:
+
+| Harness | Passed | Median time | Cost per solved task | Input tokens per run |
+| --- | --- | --- | --- | --- |
+| **Sutra (fast)** | 12/12 | **9.4 s** | **$0.0015** | **29,181** |
+| OpenCode | 12/12 | 10.6 s | $0.0018 | 47,430 |
+| Goose | 12/12 | 10.9 s | $0.0019 | 33,408 |
+| Claude Code | 12/12 | 10.8 s | $0.0030 | 76,353 |
+| Sutra (balanced) | 12/12 | 12.8 s | $0.0030 | 41,024 |
+| Qwen Code | 12/12 | 17.4 s | $0.0044 | 95,495 |
+
+Every harness that reached the model solved every task, so these small tasks only separate them on cost, speed and tokens; a harder suite is needed to compare accuracy. Codex CLI couldn't take part, because its current version needs OpenAI's Responses API and DeepSeek offers only Chat Completions. Aider wasn't installed for this run. Run it yourself with `benchmarks/harnesses/run.sh`.
+
 > [!NOTE]
-> No benchmark results are published yet. The numbers in this README come from test runs against a mock server, not from real models. Run `sutra bench` against your own provider to get real ones, and please share them.
+> The example session at the top of this README has illustrative numbers. The table above is a real run.
 
 ## Codebase understanding
 
@@ -403,7 +465,7 @@ Sutra is an **early preview (v0.1)**. The core is complete and well tested: the 
 What to know before relying on it:
 
 - **Real-model checks are opt-in.** The automated tests talk to a local server that speaks the providers' exact streaming protocol. To check against the real API, run `DEEPSEEK_API_KEY=… npm run test:smoke` (it costs a fraction of a cent), or run `sutra bench`.
-- **Ollama and OpenAI-compatible support is new.** It is tested against the protocol, but not yet against every server. Tool-calling quality depends heavily on the local model.
+- **Providers other than DeepSeek are new.** They are tested against the protocol, but not yet against every provider's live API. Tool-calling quality depends heavily on the model; `sutra init` checks it before you start.
 - **The sandbox is tested on macOS.** The Linux (bubblewrap) backend is implemented but hasn't been run on Linux yet. There is no Windows backend.
 - **macOS first.** Developed on macOS. Linux should work but isn't covered by CI yet. Windows isn't supported yet.
 - **Costs are estimates.** They use published prices; DeepSeek's holiday discounts aren't modelled.
@@ -417,7 +479,7 @@ What to know before relying on it:
 - [x] Saved sessions, resume and context compaction
 - [x] Cost tracking and spend limits
 - [x] Terminal UI: thread view, command palette, light and dark themes
-- [x] OpenAI-compatible and Ollama providers
+- [x] 20+ providers: OpenRouter, OpenAI, Anthropic, Gemini, Groq and more; local Ollama, LM Studio, llama.cpp, vLLM and Jan
 - [x] OS sandbox for commands (macOS Seatbelt; Linux bubblewrap)
 - [x] Session replay and audit export
 - [x] Benchmark harness with independently verified tasks

@@ -23,7 +23,28 @@ export interface OpenAICompatibleOptions {
   models?: Record<string, Partial<ModelInfo>>;
   /** Context window assumed for models with no metadata. */
   defaultContextWindow?: number;
+  /** Extra headers on every request (for example OpenRouter's app attribution). */
+  headers?: Record<string, string>;
   fetch?: typeof fetch;
+}
+
+export interface ModelDetails {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  /** USD per 1M tokens, when the server publishes prices. */
+  pricePerM?: { input: number; output: number; cachedInput: number };
+  /** Whether the model accepts tool definitions, when the server says. */
+  tools?: boolean;
+}
+
+interface RawModel {
+  id: string;
+  name?: string;
+  context_length?: number;
+  context_window?: number;
+  pricing?: { prompt?: string | number; completion?: string | number; input_cache_read?: string | number };
+  supported_parameters?: string[];
 }
 
 interface ChunkDelta {
@@ -61,6 +82,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly idleTimeoutMs: number;
   private readonly models: Record<string, ModelInfo>;
   private readonly fetchFn: typeof fetch;
+  private readonly extraHeaders: Record<string, string>;
 
   constructor(opts: OpenAICompatibleOptions) {
     this.id = opts.id;
@@ -72,6 +94,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.timeoutMs = opts.timeoutMs ?? 15 * 60_000;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 5 * 60_000;
     this.fetchFn = opts.fetch ?? globalThis.fetch;
+    this.extraHeaders = opts.headers ?? {};
     this.defaultContextWindow = opts.defaultContextWindow;
     this.models = { ...(opts.knownModels ?? {}) };
     for (const [id, info] of Object.entries(opts.models ?? {})) {
@@ -102,9 +125,30 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   async listModels(signal?: AbortSignal): Promise<string[]> {
+    return (await this.listModelDetails(signal)).map((m) => m.id);
+  }
+
+  /**
+   * The server's model list with whatever metadata it gives. OpenRouter (and
+   * some others) include context length, per-token prices and the request
+   * parameters each model supports; plain OpenAI-style servers give only ids.
+   */
+  async listModelDetails(signal?: AbortSignal): Promise<ModelDetails[]> {
     const res = await this.request("/models", { method: "GET" }, signal);
-    const body = (await res.json()) as { data?: { id: string }[] };
-    return (body.data ?? []).map((m) => m.id);
+    const body = (await res.json()) as { data?: RawModel[] } | RawModel[];
+    const list = Array.isArray(body) ? body : (body.data ?? []);
+    return list.filter((m) => typeof m?.id === "string").map((m) => {
+      const perM = (v: unknown) => (v === undefined || v === null || v === "" || Number.isNaN(Number(v)) ? undefined : Number(v) * 1e6);
+      const input = perM(m.pricing?.prompt);
+      const output = perM(m.pricing?.completion);
+      return {
+        id: m.id,
+        ...(m.name ? { name: m.name } : {}),
+        ...(typeof m.context_length === "number" ? { contextWindow: m.context_length } : typeof m.context_window === "number" ? { contextWindow: m.context_window } : {}),
+        ...(input !== undefined && output !== undefined ? { pricePerM: { input, output, cachedInput: perM(m.pricing?.input_cache_read) ?? input } } : {}),
+        ...(Array.isArray(m.supported_parameters) ? { tools: m.supported_parameters.includes("tools") } : {}),
+      };
+    });
   }
 
   private async request(path: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
@@ -116,6 +160,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         ...init,
         signal: combined,
         headers: {
+          ...this.extraHeaders,
           ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
           "content-type": "application/json",
           accept: init.method === "GET" ? "application/json" : "text/event-stream",

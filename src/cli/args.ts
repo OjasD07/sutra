@@ -52,7 +52,7 @@ Usage
 Options
   --resume                       Resume the most recent session in this directory
   --session <id>                 Resume a specific session (id or unique prefix)
-  --provider <id>                deepseek (default) | ollama | openai-compatible
+  --provider <id>                deepseek (default), openrouter, openai-compatible, anthropic, gemini, groq, ollama, lmstudio, … (sutra init lists all)
   --model <id>                   Model to use (e.g. deepseek-flash, qwen3-coder)
   --readonly                     Inspect profile: read-only tools, no edits or commands
   --profile <inspect|confirm|flow>

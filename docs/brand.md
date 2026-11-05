@@ -27,7 +27,7 @@ The mark is built from strokes on a 64-unit grid. It stays legible down to 16 px
 | `assets/github-social-card.png` | upload-ready GitHub social preview |
 | `assets/github-avatar.png` | 512×512 repository or organization avatar |
 
-The PNGs can be regenerated with `python3 scripts/render-github-assets.py` (requires Pillow). Upload `github-social-card.png` in the repository's **Settings → General → Social preview**. The README uses `github-banner.svg` directly.
+Upload `github-social-card.png` in the repository's **Settings → General → Social preview**. The README uses `github-banner.svg` directly.
 
 ## Colour
 

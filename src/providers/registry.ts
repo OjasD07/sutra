@@ -2,6 +2,8 @@ import type { SutraConfig } from "../config/schema.js";
 import { DeepSeekProvider } from "./deepseek/provider.js";
 import { OpenAICompatibleProvider } from "./openai-compatible/provider.js";
 import type { ModelProvider } from "./types.js";
+import { PROVIDERS, findPreset, isLocalUrl, presetConfigKey, type ProviderPreset } from "./catalog.js";
+import type { EndpointConfig } from "../config/schema.js";
 
 /**
  * Provider plugin interface. A factory receives the resolved config and
@@ -67,12 +69,43 @@ registerProvider("ollama", (config) => {
   });
 });
 
+/** The settings section for a catalog provider, with the catalog's defaults filled in. */
+export function endpointFor(config: SutraConfig, preset: ProviderPreset): EndpointConfig & { baseUrl: string } {
+  const section = ((config.providers as Record<string, unknown>)[presetConfigKey(preset)] ?? {}) as EndpointConfig;
+  return { ...section, models: section.models ?? {}, baseUrl: section.baseUrl ?? preset.baseUrl };
+}
+
+// Every other catalog provider is an OpenAI-compatible endpoint with its own defaults.
+for (const preset of PROVIDERS) {
+  if (factories.has(preset.id)) continue;
+  registerProvider(preset.id, (config) => {
+    const e = endpointFor(config, preset);
+    if (!e.baseUrl) throw new Error(`No URL configured for ${preset.name}. Run \`sutra init\`, or set providers.${presetConfigKey(preset)}.baseUrl in ~/.sutra/config.json.`);
+    const local = preset.local || isLocalUrl(e.baseUrl);
+    return new OpenAICompatibleProvider({
+      id: preset.id,
+      displayName: preset.name,
+      baseUrl: e.baseUrl,
+      dialect: "openai",
+      ...(e.apiKey ? { apiKey: e.apiKey } : {}),
+      freeOfCharge: e.freeOfCharge ?? local,
+      models: e.models,
+      ...(e.contextWindow ?? preset.contextWindow ? { defaultContextWindow: e.contextWindow ?? preset.contextWindow } : {}),
+      ...(preset.headers || e.headers ? { headers: { ...(preset.headers ?? {}), ...(e.headers ?? {}) } } : {}),
+      // Local models can take a while to load on first use.
+      ...(e.timeoutMs ? { timeoutMs: e.timeoutMs } : local ? { timeoutMs: 30 * 60_000, idleTimeoutMs: 10 * 60_000 } : {}),
+    });
+  });
+}
+
 /** Whether the configured provider needs an API key before it can start. */
 export function providerNeedsKey(config: SutraConfig): { needed: boolean; envVar?: string } {
   if (config.provider === "deepseek") return { needed: !config.providers.deepseek.apiKey, envVar: "DEEPSEEK_API_KEY" };
-  if (config.provider === "openai-compatible") {
-    const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/)/.test(config.providers.openai.baseUrl);
-    return { needed: !local && !config.providers.openai.apiKey, envVar: "OPENAI_API_KEY" };
-  }
-  return { needed: false };
+  if (config.provider === "openai-compatible") return { needed: !isLocalUrl(config.providers.openai.baseUrl) && !config.providers.openai.apiKey, envVar: "OPENAI_API_KEY" };
+  if (config.provider === "ollama") return { needed: false };
+  const preset = findPreset(config.provider);
+  if (!preset) return { needed: false };
+  const e = endpointFor(config, preset);
+  const local = preset.local || isLocalUrl(e.baseUrl);
+  return { needed: !local && !e.apiKey && preset.id !== "custom", ...(preset.keyEnv ? { envVar: preset.keyEnv } : {}) };
 }

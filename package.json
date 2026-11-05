@@ -1,7 +1,7 @@
 {
   "name": "sutra-agent",
   "version": "0.1.0",
-  "description": "Sutra (सूत्र) — an open-source, model-independent AI coding agent harness. The thread that connects intelligence to action.",
+  "description": "Sutra (सूत्र): an open-source AI coding agent for the terminal. Works with DeepSeek, OpenRouter, OpenAI, Anthropic, Gemini and local models, with an OS sandbox, audit replay and cost tracking.",
   "type": "module",
   "license": "Apache-2.0",
   "author": "cneuralnetwork",
@@ -31,6 +31,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
+    "prepare": "npm run build",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
@@ -43,7 +44,10 @@
     "coding-agent",
     "cli",
     "deepseek",
+    "openrouter",
+    "ollama",
     "llm",
+    "sandbox",
     "terminal"
   ],
   "dependencies": {

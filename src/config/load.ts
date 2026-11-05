@@ -1,11 +1,11 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_DEEPSEEK_MODEL } from "../providers/deepseek/models.js";
+import { findPreset, presetConfigKey, providerIds } from "../providers/catalog.js";
 import { paths } from "./paths.js";
 import { DEFAULT_PRICING } from "./pricing.js";
 import { ConfigSchema, ProjectConfigSchema, type PermissionProfile, type SutraConfig } from "./schema.js";
 
-export const PROVIDER_IDS = ["deepseek", "openai-compatible", "ollama"] as const;
 
 export interface CliOverrides {
   provider?: string;
@@ -44,6 +44,8 @@ function deepMerge<T>(base: T, over: unknown): T {
 export interface Credentials {
   deepseekApiKey?: string;
   openaiApiKey?: string;
+  /** Keys for every other provider, by provider id. */
+  apiKeys?: Record<string, string>;
 }
 
 export function readCredentials(): Credentials {
@@ -55,7 +57,8 @@ export function readCredentials(): Credentials {
 export function writeCredentials(update: Credentials): string {
   const file = paths.credentials();
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const next = { ...readCredentials(), ...update };
+  const current = readCredentials();
+  const next = { ...current, ...update, ...(update.apiKeys || current.apiKeys ? { apiKeys: { ...(current.apiKeys ?? {}), ...(update.apiKeys ?? {}) } } : {}) };
   writeFileSync(file, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   chmodSync(file, 0o600);
   return file;
@@ -132,15 +135,36 @@ export function loadConfig(workspace: string, cli: CliOverrides = {}, env = proc
   }
   if (creds.openaiApiKey) config.providers.openai.apiKey = creds.openaiApiKey;
   if (env.OPENAI_API_KEY) config.providers.openai.apiKey = env.OPENAI_API_KEY;
-  if (config.provider !== "deepseek") apiKeySource = config.provider === "openai-compatible" && config.providers.openai.apiKey ? (env.OPENAI_API_KEY ? "env" : "credentials") : "none";
+  if (config.provider === "openai-compatible") apiKeySource = config.providers.openai.apiKey ? (env.OPENAI_API_KEY ? "env" : "credentials") : "none";
+  else if (config.provider !== "deepseek") apiKeySource = "none";
+
+  // Every other catalog provider: env > credentials (apiKeys.<id>) > config.
+  const preset = findPreset(config.provider);
+  if (preset && !["deepseek", "openai-compatible", "ollama"].includes(preset.id)) {
+    const key = presetConfigKey(preset);
+    const section = ((config.providers as Record<string, unknown>)[key] ?? { models: {} }) as { apiKey?: string; models: Record<string, unknown> };
+    if (section.apiKey) {
+      apiKeySource = "config";
+      warnings.push(`API key found in config.json for ${preset.name}; prefer ${preset.keyEnv ?? "the environment"} or \`sutra init\` (credentials.json, mode 600).`);
+    }
+    if (creds.apiKeys?.[preset.id]) {
+      section.apiKey = creds.apiKeys[preset.id];
+      apiKeySource = "credentials";
+    }
+    if (preset.keyEnv && env[preset.keyEnv]) {
+      section.apiKey = env[preset.keyEnv];
+      apiKeySource = "env";
+    }
+    (config.providers as Record<string, unknown>)[key] = section;
+  }
 
   // CLI
   if (cli.model) config.model = cli.model;
   if (cli.profile) config.permissions.profile = cli.profile;
   if (cli.thinking) config.thinking = cli.thinking;
 
-  if (!(PROVIDER_IDS as readonly string[]).includes(config.provider))
-    throw new Error(`Unknown provider "${config.provider}". Use one of: ${PROVIDER_IDS.join(", ")}`);
+  if (!providerIds().includes(config.provider))
+    throw new Error(`Unknown provider "${config.provider}". Use one of: ${providerIds().join(", ")}`);
   // Other providers have no universal default; Sutra asks the server for its models at startup.
   if (config.provider === "deepseek") config.model ??= DEFAULT_DEEPSEEK_MODEL;
   config.pricing = { ...DEFAULT_PRICING, ...config.pricing };

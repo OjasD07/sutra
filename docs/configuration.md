@@ -23,10 +23,11 @@ Set `SUTRA_HOME` to relocate `~/.sutra`.
 | `DEEPSEEK_API_KEY` | API key (takes precedence over credentials.json) |
 | `DEEPSEEK_BASE_URL` | default `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | e.g. `deepseek-flash`, `deepseek-v4-pro` (DeepSeek only) |
-| `SUTRA_PROVIDER` | `deepseek` (default), `ollama` or `openai-compatible` |
+| `SUTRA_PROVIDER` | any provider id from the table under [Providers](#providers) |
 | `SUTRA_MODEL` | model for any provider |
 | `SUTRA_QUALITY` | `fast` / `balanced` / `deep` |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | endpoint and key for `openai-compatible` |
+| `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, … | key for that provider (see the table below) |
 | `OLLAMA_HOST` | Ollama address, e.g. `127.0.0.1:11434` (Sutra adds `/v1`) |
 | `SUTRA_PROFILE` | `inspect` / `confirm` / `flow` |
 | `SUTRA_LANG` | `en` / `hi` |
@@ -75,13 +76,46 @@ Sutra does not read `.env` files. See [security.md](security.md) for why.
 
 ## Providers
 
-| `provider` | Endpoint | Key | Cost |
-| --- | --- | --- | --- |
-| `deepseek` | `providers.deepseek.baseUrl` (default `https://api.deepseek.com`) | `DEEPSEEK_API_KEY` or `sutra init` | DeepSeek prices (below) |
-| `ollama` | `providers.ollama.baseUrl` (default `http://localhost:11434/v1`) | none | $0 |
-| `openai-compatible` | `providers.openai.baseUrl` (default `https://api.openai.com/v1`) | `OPENAI_API_KEY`; optional for `localhost` | `pricing.<model>` if set; $0 when `providers.openai.freeOfCharge` is true; otherwise "unknown" |
+`sutra init` sets any of these up interactively. Keys come from the environment variable shown, or from `~/.sutra/credentials.json` (mode 600), where `sutra init` saves them.
 
-For Ollama and OpenAI-compatible servers there is no built-in default model. Sutra uses `model` from your config or `--model`; if neither is set, it uses the first model the server lists and tells you so.
+| `provider` | Service | Default endpoint | Key |
+| --- | --- | --- | --- |
+| `deepseek` | DeepSeek | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
+| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| `openai-compatible` | OpenAI, or any OpenAI-compatible server | `https://api.openai.com/v1` (`providers.openai.baseUrl`) | `OPENAI_API_KEY`; optional for `localhost` |
+| `anthropic` | Anthropic (OpenAI-compatible endpoint) | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
+| `gemini` | Google Gemini (OpenAI-compatible endpoint) | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
+| `xai` | xAI | `https://api.x.ai/v1` | `XAI_API_KEY` |
+| `mistral` | Mistral | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| `groq` | Groq | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| `cerebras` | Cerebras | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` |
+| `together` | Together AI | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| `fireworks` | Fireworks AI | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` |
+| `deepinfra` | DeepInfra | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` |
+| `moonshot` | Moonshot (Kimi) | `https://api.moonshot.ai/v1` | `MOONSHOT_API_KEY` |
+| `zai` | Z.ai (GLM) | `https://api.z.ai/api/paas/v4` | `ZAI_API_KEY` |
+| `qwen` | Alibaba Cloud DashScope (international) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `DASHSCOPE_API_KEY` |
+| `sambanova` | SambaNova | `https://api.sambanova.ai/v1` | `SAMBANOVA_API_KEY` |
+| `huggingface` | Hugging Face Inference Providers | `https://router.huggingface.co/v1` | `HF_TOKEN` |
+| `vercel` | Vercel AI Gateway | `https://ai-gateway.vercel.sh/v1` | `AI_GATEWAY_API_KEY` |
+| `ollama` | Ollama (local) | `http://localhost:11434/v1` | none |
+| `lmstudio` | LM Studio (local) | `http://localhost:1234/v1` | none |
+| `llamacpp` | llama.cpp `llama-server` (local) | `http://localhost:8080/v1` | none |
+| `vllm` | vLLM (local) | `http://localhost:8000/v1` | none |
+| `jan` | Jan (local) | `http://localhost:1337/v1` | none |
+| `custom` | any other OpenAI-compatible server | set `providers.custom.baseUrl` | `SUTRA_CUSTOM_API_KEY`, optional |
+
+Each provider has its own section under `providers.<id>` with optional `baseUrl` (to override the default, for a regional endpoint or a proxy), `models` (per-model overrides such as `contextWindow`), `contextWindow`, `timeoutMs`, `freeOfCharge` and `headers`. Local providers cost $0. For cloud providers, cost comes from `pricing.<model>`: DeepSeek's prices are built in, and `sutra init` saves the prices OpenRouter publishes for the model you pick; otherwise `/cost` shows tokens and marks the cost unknown.
+
+```json
+{
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-chat",
+  "providers": { "openrouter": { "models": { "deepseek/deepseek-chat": { "contextWindow": 163840 } } } }
+}
+```
+
+Only DeepSeek has a built-in default model. For the others Sutra uses `model` from your config or `--model`; if neither is set, it uses the first model the server lists and tells you so.
 
 ```json
 {
@@ -127,7 +161,7 @@ The OpenAI-compatible adapter sends standard Chat Completions (streaming, `tools
 
 | Key | |
 | --- | --- |
-| `compile` | Send a repeated test run as a delta against the previous run, an unchanged re-read as a pointer to the earlier result, and skip an identical test run when nothing changed since. The full output of every call stays available through `get_output`. See [token-economy-implemented.md](token-economy-implemented.md) |
+| `compile` | Send a repeated test run as a delta against the previous run, an unchanged re-read as a pointer to the earlier result, and skip an identical test run when nothing changed since. The full output of every call stays available through `get_output`. See [token-economy.md](token-economy.md) |
 | `checkpointThreshold` | When tests pass after edits and the context is above this fraction of `maxContextTokens`, compact then, at a settled point, instead of later in the middle of an investigation |
 
 ## Repository index

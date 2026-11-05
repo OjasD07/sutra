@@ -12,7 +12,7 @@ request
   → verified / partial / unverified / failed, with the check behind each criterion
 ```
 
-The original research proposal, with the full rationale, is kept in [quality-engine-proposal.md](quality-engine-proposal.md). It draws on [Agentless](https://arxiv.org/abs/2407.01489), [PatchPilot](https://arxiv.org/abs/2502.02747), [LocAgent](https://arxiv.org/abs/2503.09089), [SWE-Replay](https://arxiv.org/abs/2601.22129), [Scaling Test-Time Compute for Agentic Coding](https://arxiv.org/abs/2604.16529), [RETRACE](https://arxiv.org/abs/2608.08950) and [SWE-Mutation](https://arxiv.org/abs/2605.22175). Those papers report results on their own benchmarks; they say nothing about gains in Sutra. What has been measured in Sutra is listed at the end.
+The design draws on [Agentless](https://arxiv.org/abs/2407.01489), [PatchPilot](https://arxiv.org/abs/2502.02747), [LocAgent](https://arxiv.org/abs/2503.09089), [SWE-Replay](https://arxiv.org/abs/2601.22129), [Scaling Test-Time Compute for Agentic Coding](https://arxiv.org/abs/2604.16529), [RETRACE](https://arxiv.org/abs/2608.08950) and [SWE-Mutation](https://arxiv.org/abs/2605.22175). Those papers report results on their own benchmarks; they say nothing about gains in Sutra. What has been measured in Sutra is listed at the end.
 
 ## Modes
 

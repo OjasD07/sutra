@@ -1,90 +1,137 @@
-# Token economy: more verified tasks per token
+# Token economy
 
-Research and design proposal, 5 November 2026. These are proposed changes, not implemented behavior.
+This page describes what Sutra does to spend fewer tokens per verified task, and what has been measured.
 
-## Objective
+The target remains **verified tasks per billed token**, not raw compression. Every change below is lossless: the full text is always one call away. Wherever a lossless result can't be guaranteed, Sutra falls back to sending the full output.
 
-Optimize **independently verified tasks solved per million billed tokens**, subject to a fixed time and spend budget. Also report verified tasks per dollar and per minute: cached input tokens can be billed differently from uncached input and output tokens. Report the pass rate alongside every efficiency number. A smaller prompt that causes more searches, retries, or failed tasks is a regression.
+## 1. Conditional repository map
 
-This distinction is empirically important. In paired coding-agent runs, [Token Reduction Is Not Cost Reduction](https://arxiv.org/abs/2607.12161) found a setup that removed 38.4% of delivered tool-output tokens but raised billed cost by 6.8%. A separate [context-compression study](https://arxiv.org/abs/2609.32961) found that aggressive compression could reduce tokens yet lengthen agent execution. Neither result transfers automatically to Sutra; they define what we must measure.
+`src/context/focus-map.ts`, config `index.mapMode` (`auto` | `always` | `never`), CLI `--map`.
 
-## Where Sutra currently spends tokens
+- **Before:** a 2,000-token static map sat in the system prompt on every request.
+- **`auto` (the new default):** for each request, Sutra decides:
+  - **No map** when the request names an indexed file, quotes a test that resolves to one file, or names an identifier with a single definition. Also no map for short follow-ups (three words or fewer), for follow-ups that name no code, and when every file it would focus on was already mapped this session.
+  - **A focused map** (about 1,200 tokens) when the request is ambiguous, or spans files (for example "rename … everywhere", "where is …", or two named files). It is centred on the named files, their definitions, related tests and the top search hits. It is appended after the request, so the cached prefix stays unchanged.
+- **`always`:** the old static map in the system prompt. **`never`:** no map at all; `repo_map` remains available as a tool.
+- **Record:** every turn records its decision (`TurnResult.contextMap`), and `sutra bench` reports it per task.
 
-- The 2,000-token repository map is placed in the system prompt by default on every model request. Prefix caching discounts repeated copies, but the first copy and cache misses still count. Sutra's own three-question navigation A/B test found no answer-quality gain on its roughly 100-file repository.
-- The quality engine's `balanced` mode makes a short contract call, two alignment-review calls, and a finish-gate judge call for a changed task; it may judge again after counterexamples. On the four bundled live tasks, `fast` and `balanced` both solved 4/4, while `balanced` cost 32% more. Those four tasks are too easy to estimate the quality benefit.
-- `read_file` defaults to 2,000 lines, and tool output may contribute up to 30,000 characters to the next model request. The full conversation and tool results remain in context until the configured 75%-of-200K-token compaction threshold.
-- All tool definitions are sent on every inference request. A growing tool catalog increases the prompt and may complicate tool choice.
-- The current usage ledger records input, cached input, output, reasoning, and cost, but does not attribute tokens to the map, evidence packet, tool schemas, file reads, test logs, contract, review, judge, or branch stage.
+## 2. Context compiler
 
-## Proposed changes
+`src/context/compiler.ts` and `src/context/test-report.ts`, config `context.compile` (default `true`).
 
-### 1. Add a token and outcome profiler before optimizing
+Each tool result is compiled once, at the moment it enters history. Earlier messages are never rewritten.
 
-For every request, record token counts by **stable instructions, tool schemas, repository map, evidence packet, active task state, old conversation, file excerpts, test output, and model output**. Attribute auxiliary calls to `contract`, `review`, `judge`, `verifier`, and `candidate`. Track cache-hit tokens and the number of model round trips. Exact per-segment tokenization may require provider-specific tokenizers; use estimates for segments and reconcile them to provider-reported totals. Never present an estimate as a provider measurement.
+- **Repeated test runs become deltas.** A run of the same command as before is compared with the previous run, failure by failure. The model receives:
+  - unchanged failures, by name, pointing at the call that last showed their exact text;
+  - changed or new failures, with their exact assertion and stack block;
+  - tests that now pass;
+  - pass counts compared with the previous run;
+  - `get_output {"call_id": …}` for the full log.
 
-Add `sutra cost --explain` with a per-stage waterfall and a per-turn comparison: “this packet cost 1,300 input tokens and avoided two search rounds” only when the counterfactual has been measured, not inferred from one run. Report `solved / billed tokens`, `solved / uncached-equivalent cost`, and `solved / wall time` in benchmark JSON.
+  Failure blocks are parsed from node:test (spec and TAP), vitest/jest and pytest output. If any failing test can't be isolated, the log was truncated, or the run crashed, the full output is sent instead.
+- **Unchanged re-reads become pointers.** A `read_file` of a range already shown, with the same content hash, returns a pointer to the earlier call. Edits stay allowed, because the file really was read.
+- **Edits mark old reads as stale.** A successful edit names the earlier reads of that file that are now out of date, and forgets them. Edit anchors always come from the current text.
+- **Compaction resets the records.** After compaction, nothing points at results that are no longer in context. The summary gains harness facts: the latest result of each test command, with failure excerpts, and the current content hash of every edited file.
+- **`get_output`** (new tool) returns the exact recorded output of an earlier call, with optional line ranges. `diagnose_failure` stores the raw runner output there.
 
-**Code:** `src/telemetry/cost.ts`, `src/core/agent/runtime.ts`, `src/quality/aux.ts`, `src/bench/bench.ts`.
+## 3. Identical re-runs are skipped
 
-### 2. Replace fixed context with a task-specific context compiler
+`ContextCompiler.preempt` runs before the permission check. It answers a `run_tests` (or `diagnose_failure`) call identical to the previous one with "not re-run — nothing changed since call N", in these conditions:
 
-At each model step, assemble a small **working set** from the task contract and evidence ledger: the current acceptance criteria, active hypotheses, relevant code spans, latest failing checks, and decisions that remain valid. Give each item a file hash/edit epoch and a reason for inclusion. Invalidate stale code and test observations after edits. Keep the full source, logs, and audit in local storage, retrievable on demand.
+- No edit, no other command and no new user turn has happened since. Any of these advances the compiler's epoch.
+- The call does not pass `force: true`. `run_tests` accepts it, for example for flaky tests.
 
-Use progressive disclosure: begin with signatures and small relevant spans; expand to full functions or adjacent files when the model asks or when tests point there. Preserve exact line numbers and verbatim edit anchors. Do not blindly cap every read at a tiny number of lines. [Agent Retrieval Bench](https://arxiv.org/abs/2607.24882) found that retrieval methods win on different tasks and that agents fail to touch any gold file in a substantial fraction of runs; context selection needs a recall guard as well as a token limit.
+Skipped runs are not counted as tests and are not checks for the finish gate.
 
-Make the current 2,000-token map **conditional**: small repos or tasks with an explicit path may need no map; ambiguous cross-file tasks may benefit from a focused map or evidence packet. Compare map, packet, both, and neither at a fixed budget. [The Physical Cost of Context](https://arxiv.org/abs/2610.34763) found that good initial retrieval reduced model calls in a localization workload, while destructive history masking harmed cache reuse.
+## 4. Focused tools
 
-**Code:** `src/context/manager.ts`, `src/index/service.ts`, `src/quality/localize.ts`, `src/core/session.ts`.
+- **`inspect_symbol`** (`src/tools/index/inspect-tools.ts`) returns, for one symbol:
+  - the definition, with its exact body line-numbered like `read_file`. The body's end is found by matching braces, or by indentation for Python-like languages. Bodies are capped at 80 lines by default; a longer body says where it continues.
+  - callers, each with the function the call sits in;
+  - tests that mention the symbol.
 
-### 3. Make tool results progressive and loss-aware
+  The file is recorded as read, so it can be edited directly.
+- **`diagnose_failure`** (`src/tools/shell/diagnose-tool.ts`) runs the tests, targeted by an optional `filter`. For each failure (up to 3) it returns:
+  - the exact assertion, with runtime-internal stack frames dropped;
+  - the top stack frame in your source code, with ±5 lines and the enclosing function;
+  - the assertion line in the test;
+  - when no source frame exists, the source definitions called on that line.
 
-Parse test/build output into structured observations: exact failing test names, assertion and stack frames, counts, exit code, changed status since the previous run, and a pointer to the raw log. For the next request, show the **new information**: “same 2 failures; one new stack frame; 18 unchanged passes.” The model can fetch the full log if needed.
+  It falls back to the raw output if failures can't be isolated. It is an `execute` tool under the same approval rules as `run_tests`, and the quality engine counts it as a test check.
 
-Do the same for repeated file reads and searches: return content once with a stable `file@hash:lines` identifier; later results can say “unchanged since observation 17” and provide a way to expand. This is deduplication, not lossy paraphrase. Preserve exact code hunks, compiler diagnostics, and assertion text, because aggressive output compression has been shown to corrupt edit anchors and reduce solves in [Token Reduction Is Not Cost Reduction](https://arxiv.org/abs/2607.12161).
+## 5. Quality checks that earn their tokens (experiment)
 
-**Code:** `src/tools/shell/`, `src/tools/filesystem/read-tools.ts`, `src/core/agent/runtime.ts`, `src/memory/store.ts`.
+Config `quality.economy` (default `false`), CLI `--economy`, in `src/quality/engine.ts`.
 
-### 4. Reduce model round trips with agent-native inspection tools
+- **When there is a failing baseline.** For a bug whose baseline run has named failing tests, the acceptance criteria come from that baseline instead of a contract call:
+  1. the previously failing tests pass;
+  2. the full suite passes;
+  3. no test files are modified.
+- **At the finish gate.** If the latest full-suite run is fresh and passes, the harness's change record shows no test file changed, and no banked counterexample fails, then the criteria are settled without the model. The review and judge calls are skipped.
+- **Otherwise, the normal path.** This includes a targeted run that isn't the full suite, a feature request with no failing baseline, or any doubt.
+- **What gets recorded.** Skipped calls are listed in `Verification.economy`. Counterexample rules are unchanged: `balanced` hunts only when a criterion is open, and `deep` always hunts.
 
-Add a small number of focused composite tools:
+This trades the independent review for cost on well-covered bug fixes. The review can catch problems tests miss, which is why it is off by default.
 
-- `inspect_symbol(name)`: definition, bounded body, callers, tests, and file version in one observation;
-- `diagnose_failure(command)`: run the targeted check, parse its failure, map the relevant stack frames to source symbols, and return one bounded report;
-- `check_patch()`: diff, targeted test, type check, and changed-failure summary under the normal permission rules.
+## 6. Prompt-cache continuity
 
-The aim is to replace search → read → search → read cycles with one high-information observation, not to hide capabilities behind an opaque mega-tool. The [SWE-agent interface study](https://arxiv.org/abs/2405.15793) established that agent-facing tool design can materially affect coding performance. Keep tool descriptions and schemas stable for prefix caching, and ablate each new tool against the current primitives.
+- **Stable prefix.** The system prompt and tool list are now byte-stable within a session: the map moved out, and tool order is fixed. Per-request evidence (packet, focused map) is appended after the request, and tool results are never rewritten after the fact.
+- **Checkpoint compaction.** Config `context.checkpointThreshold`, default 0.5. When tests pass after edits and context is above that fraction of `maxContextTokens`, Sutra compacts at that settled point. Otherwise compaction happens later, at 75%, in the middle of an investigation. Compaction changes the prefix once, deliberately.
+- **Measured cache hits.**
+  - `sutra bench` reports the provider-reported cache-hit fraction (`summary.cacheHitRate`) and the harness settings for each run.
+  - `/cost` shows the cache-hit meter. It also shows a **Compiler** row: test deltas, unchanged re-reads, skipped re-runs and approximate tokens kept out.
 
-**Code:** `src/tools/`, `src/index/`, `src/tools/registry.ts`.
+## 7. Budget by information gained
 
-### 5. Preserve prompt-cache continuity
+**This is rule-based, not a learned or general value-of-information controller.** Each rule spends only when the action could resolve an open question:
 
-Keep the stable system instructions and tool definitions byte-stable and ordered. Put per-task evidence after that stable prefix. Compact at explicit checkpoints rather than rewriting the earliest messages whenever the prompt gets long. Compare the provider's actual cache-hit fraction before and after each policy change. DeepSeek documents automatic prefix-based caching and reports `prompt_cache_hit_tokens`; hits are best-effort, not guaranteed. [DeepSeek context caching](https://api-docs.deepseek.com/guides/kv_cache/) · [TokenPilot](https://arxiv.org/abs/2606.17016)
+- a test re-run with nothing changed is skipped;
+- a re-read of unchanged text becomes a pointer;
+- a map is sent only when the request is ambiguous or spans files;
+- with `--economy`, review and judge are skipped when deterministic checks settle every criterion;
+- `balanced` runs the counterexample hunt only when a criterion still lacks evidence. This rule predates this work.
 
-Avoid a naive “last five messages only” mode. It can remove cheap cached context, force rediscovery, and worsen effective compute, as shown in [The Physical Cost of Context](https://arxiv.org/abs/2610.34763). When a segment truly expires, move it out at a checkpoint and keep an evidence pointer so it can be restored.
+There is no per-action estimate of expected information gain. Thresholds have not been tuned on held-out data.
 
-**Code:** `src/context/manager.ts`, `src/context/system-prompt.ts`, `src/providers/`.
+## What has been measured
 
-### 6. Spend quality-engine calls only when they change a decision
+These runs used the live DeepSeek API (`deepseek-flash`) on 5 November 2026, with one run per setting.
 
-Keep `fast` as the low-overhead baseline. In `balanced`, skip contract extraction when the task is a simple explicit change with a deterministic acceptance check. Skip the two-call alignment review when the patch is narrow, the changed behavior is covered by a baseline-fail/head-pass test, and no instruction or test has been weakened. Skip an LLM judge when a criterion maps unambiguously to a fresh structured check. If evidence conflicts, the patch crosses a subsystem boundary, or the user request is ambiguous, pay for the independent calls.
+### Bundled benchmark (4 tasks)
 
-These skips are hypotheses, not automatic wins: the review can catch errors tests miss. Measure false completions, regressions, and solve rate under the same budget. [Scaling Inference-Time Compute with Teams of Coding Agents](https://arxiv.org/abs/2610.17471) found that where extra compute is spent matters greatly, and that additional workers can be costly.
+| Setting | Pass | Gate verdict | Cost | Time | Input tokens | Cache hits |
+| --- | --- | --- | --- | --- | --- | --- |
+| `fast` | 4/4 | partial × 4 | $0.0059 | 40 s | 116,471 | 82% |
+| `balanced` | 4/4 | verified × 4 | $0.0065 | 46 s | 86,650 | 70% |
+| `balanced --economy` | 4/4 | verified × 4 | $0.0055 | 31 s | 84,370 | 74% |
+| `balanced --map always` | 4/4 | verified × 4 | $0.0064 | 45 s | 87,314 | 71% |
 
-**Code:** `src/quality/engine.ts`, `src/quality/review.ts`, `src/quality/types.ts`.
+For comparison, before this work (same day, same tasks): `fast` cost $0.0056 in 41 s, and `balanced` $0.0074 in 59 s.
 
-### 7. Allocate a per-task information budget
+**What this shows:**
 
-Treat each optional action as a proposed experiment with an estimated token cost and a question it could resolve. Prefer an action that distinguishes live hypotheses or checks an unmet criterion. Stop paying for more reads when the current location is confirmed; stop paying for more reviewers when evidence is decisive. Route narrow planning or classification calls to a cheaper or local model only after checking that they preserve solve rate; keep the main implementation model strong when needed. A recent [coding-agent team study](https://arxiv.org/abs/2610.17471) found cheap planners useful but cheap implementers harmful in its setting.
+- **Economy.** It was 15% cheaper and 33% faster than `balanced`, with the same verdicts. On three of four tasks it used 4 model requests instead of 8: the contract, review and judge calls were skipped. On the fourth (slugify) it took the normal path.
+- **Map.** In `auto`, three of the four tasks named their file and got no map. The fourth (session-expiry, "the request is ambiguous") got a focused map. The cost difference against `--map always` is within run-to-run noise on these tasks.
+- **Compiler.** It barely triggered: one test delta in one task, 142 characters saved. These tasks take 4–8 requests and rarely re-run or re-read anything. The compiler's savings would show on long debugging sessions, which this suite doesn't contain.
+- **Limits of this suite.** All settings solve 4/4, so this suite cannot show solve-rate gains or losses. One run per setting cannot separate small cost differences from noise. The comparison with the earlier runs mixes this work with other changes made on the same day.
 
-Start with transparent rules and stage budgets. Learn thresholds only after enough held-out task data exists. The controller's target is **marginal verified-success gain per additional billed token**, not the solver's self-reported confidence.
+### Navigation A/B on Sutra's own repository
 
-**Code:** `src/quality/engine.ts`, `src/config/schema.ts`, `src/telemetry/`.
+Three read-only questions, `--quality fast`, map `auto` against map `always` (the static map in the system prompt):
 
-## Rollout and measurement
+| Question | Map (`auto`) | `auto`: input tokens / tools / cost | `always`: input tokens / tools / cost |
+| --- | --- | --- | --- |
+| Where network access is decided and what the sandbox does | focused (spans files) | 109,373 / 12 / $0.0056 | 96,386 / 10 / $0.0050 |
+| How the finish gate decides a criterion passed | focused (spans files) | 29,446 / 3 / $0.0020 | 39,959 / 4 / $0.0026 |
+| Which function in `test-counts.ts` parses pytest failures | none (file named) | 12,901 / 3 / $0.0007 | 10,580 / 1 / $0.0006 |
+| **Total** | | **151,720 / 18 / $0.0084** | **146,925 / 15 / $0.0082** |
 
-1. **Instrument:** stage-attributed token and cache metrics, plus a held-out suite of harder repository tasks. The current four-task suite is saturated at 4/4 and cannot show an improvement in solve rate.
-2. **Ablate cheap changes:** conditional map, smaller/focused reads, structured test deltas, and deterministic judge bypass. Ship only changes that improve the verified-solve/token frontier without a material rise in false completions.
-3. **Add composite tools and context compiler:** compare each against the current tool loop on the same tasks, models, and budgets.
-4. **Tune adaptive allocation:** include fast, balanced, and deep outcomes at fixed token and dollar caps; report the trade-off curve, not one “best” score.
+**Result: a wash.** `auto` was cheaper on one question and slightly more expensive on two; the totals are within 3%. All six answers located the right code. On the third question, the `auto` answer named `parseFailingTests` as the pytest failure parser. The `always` answer said there was no dedicated function, and pointed at the inline pytest handling in `parseTestCounts`. The `auto` answer is the more precise of the two.
 
-Paired repeated trials should report pass rate, billed input/cache-hit/output/reasoning tokens, cost, latency, model calls, tool calls, and false-verification rate. A policy wins if it solves more tasks at the same token budget, or uses fewer tokens at a non-inferior solve rate. Do not ship a compression layer merely because its isolated compression ratio looks good.
+This matches the earlier finding: on a repository of about 100 files, a map neither helps nor hurts much. Whether the focused map pays off on large repositories, where grep stops being enough, has not been measured.
+
+### Next steps for measurement
+
+- **A harder held-out suite.** It should have long debugging tasks, where test deltas, read dedupe and skipped re-runs actually trigger.
+- **Repeated paired runs.** Run each setting several times, comparing solve rate, billed tokens, cache hits and false "verified" verdicts.
+- **Measure economy's risk.** Check how often the skipped review would have caught a real gap.

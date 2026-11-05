@@ -112,7 +112,7 @@ The system prompt stays stable within a session. The plan reaches the model thro
 
 ## Context compiler
 
-`ContextCompiler` (`src/context/compiler.ts`, one per session) turns each tool result into the text that enters history, once, at the moment the result is known, so earlier messages are never rewritten and the provider's prefix cache stays valid. It dedupes unchanged re-reads by content hash, sends repeated test runs as deltas (parsed by `src/context/test-report.ts`, falling back to the full output whenever a failure can't be isolated), notes reads made stale by an edit, and keeps the full output of recent calls for `get_output`. `preempt` runs before the permission check and answers an identical test run with nothing changed since. Records are cleared on compaction, and their facts (latest failures, current file hashes) go into the summary. See [token-economy-implemented.md](token-economy-implemented.md).
+`ContextCompiler` (`src/context/compiler.ts`, one per session) turns each tool result into the text that enters history, once, at the moment the result is known, so earlier messages are never rewritten and the provider's prefix cache stays valid. It dedupes unchanged re-reads by content hash, sends repeated test runs as deltas (parsed by `src/context/test-report.ts`, falling back to the full output whenever a failure can't be isolated), notes reads made stale by an edit, and keeps the full output of recent calls for `get_output`. `preempt` runs before the permission check and answers an identical test run with nothing changed since. Records are cleared on compaction, and their facts (latest failures, current file hashes) go into the summary. See [token-economy.md](token-economy.md).
 
 ## Quality engine
 

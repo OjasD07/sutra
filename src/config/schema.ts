@@ -34,6 +34,22 @@ const ModelInfoOverride = z.object({
   thinkingSupportsTools: z.boolean().optional(),
 });
 
+/** Settings for one catalog provider (OpenRouter, Groq, LM Studio, ...): see src/providers/catalog.ts. */
+export const EndpointSchema = z.object({
+  /** Overrides the catalog's base URL (for example a regional endpoint or a proxy). */
+  baseUrl: z.string().url().optional(),
+  /** Discouraged: keep keys in credentials.json (`sutra init`) or the environment. */
+  apiKey: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  models: z.record(z.string(), ModelInfoOverride).default({}),
+  /** Context window assumed for models with no metadata. */
+  contextWindow: z.number().int().positive().optional(),
+  /** Treat requests as free (self-hosted inference). */
+  freeOfCharge: z.boolean().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+export type EndpointConfig = z.infer<typeof EndpointSchema>;
+
 export const ConfigSchema = z.object({
   provider: z.string().default("deepseek"),
   model: z.string().optional(),
@@ -88,6 +104,8 @@ export const ConfigSchema = z.object({
         })
         .prefault({}),
     })
+    // Every other catalog provider: providers.openrouter, providers.groq, providers.lmstudio, ...
+    .catchall(EndpointSchema)
     .prefault({}),
   sandbox: z
     .object({
