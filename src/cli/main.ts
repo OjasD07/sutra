@@ -4,7 +4,10 @@ import { openSession } from "../core/session.js";
 import { setLanguage, t } from "../i18n/index.js";
 import { SessionStore } from "../memory/store.js";
 import { canonicalize } from "../permissions/paths.js";
-import { createProvider } from "../providers/registry.js";
+import { createProvider, providerNeedsKey } from "../providers/registry.js";
+import type { SessionHandle } from "../core/session.js";
+import { runAuditCommand } from "./audit-command.js";
+import { runBenchCommand } from "./bench-command.js";
 import { initLogger, log } from "../telemetry/logger.js";
 import { colorEnabled, detectTheme } from "../tui/theme.js";
 import { version } from "../version.js";
@@ -43,6 +46,7 @@ export async function main(argv: string[]): Promise<number> {
   let loaded;
   try {
     loaded = loadConfig(workspaceRoot, {
+      ...(args.provider ? { provider: args.provider } : {}),
       ...(args.model ? { model: args.model } : {}),
       ...(args.profile ? { profile: args.profile } : {}),
       ...(args.thinking ? { thinking: args.thinking } : {}),
@@ -57,13 +61,48 @@ export async function main(argv: string[]): Promise<number> {
 
   if (args.command === "init") return runInit({ color, theme });
 
-  if (!config.providers.deepseek.apiKey && config.provider === "deepseek") {
-    process.stderr.write(`${t("noApiKey")}\n`);
+  if (args.sandbox) config.sandbox.mode = args.sandbox;
+
+  // Commands that only read the local session store need no provider.
+  if (args.command === "replay" || args.command === "export") {
+    const store = new SessionStore(paths.database());
+    try {
+      return runAuditCommand(args.command, store, workspaceRoot, args, { theme, color });
+    } finally {
+      store.close();
+    }
+  }
+
+  const key = providerNeedsKey(config);
+  if (key.needed) {
+    process.stderr.write(config.provider === "deepseek" ? `${t("noApiKey")}\n` : `No API key for ${config.provider}. Set ${key.envVar}, or run \`sutra init\`.\n`);
     return 1;
   }
 
   const provider = createProvider(config);
+  if (!config.model) {
+    // Ollama / OpenAI-compatible servers: use the first model the server reports.
+    try {
+      const ids = await provider.listModels?.(AbortSignal.timeout(10_000));
+      if (!ids?.length) throw new Error("the server reported no models");
+      config.model = ids[0]!;
+      warnings.push(`No model configured; using ${config.model} (first of ${ids.length} on the server). Pass --model to choose.`);
+    } catch (err) {
+      const hint = config.provider === "ollama" ? " Is Ollama running (`ollama serve`) and has a model been pulled (`ollama pull qwen3-coder`)?" : "";
+      process.stderr.write(`sutra: could not determine a model for ${provider.displayName}: ${(err as Error).message}.${hint} Pass --model <id>.\n`);
+      return 1;
+    }
+  }
+
   const store = new SessionStore(paths.database());
+
+  if (args.command === "bench") {
+    try {
+      return await runBenchCommand({ args, config, provider, store, theme, color });
+    } finally {
+      store.close();
+    }
+  }
 
   let resumeId: string | undefined = args.session;
   if (args.resume && !resumeId) {
@@ -88,6 +127,7 @@ export async function main(argv: string[]): Promise<number> {
       }
       for (const w of warnings) process.stderr.write(`[warn] ${w}\n`);
       const session = openSession({ config, provider, store, workspaceRoot, approve: async () => "deny", ...(resumeId ? { resumeId } : {}) });
+      if (!requireSandbox(session)) return 1;
       if (session.repairedToolCalls) process.stderr.write(`[info] repaired ${session.repairedToolCalls} interrupted tool call(s) from the previous run\n`);
       const result = await runHeadless(session, prompt, { theme, color, json: args.json });
       return result.status === "completed" ? 0 : result.status === "cancelled" ? 130 : 1;
@@ -97,7 +137,9 @@ export async function main(argv: string[]): Promise<number> {
     const bridge = new ApprovalBridge();
     const make = (id?: string) => openSession({ config, provider, store, workspaceRoot, approve: bridge.request, ...(id ? { resumeId: id } : {}) });
     const session = make(resumeId);
+    if (!requireSandbox(session)) return 1;
     const notices = [...warnings];
+    if (!session.sandbox.runner && session.sandbox.mode === "auto") notices.push(`No OS sandbox: ${session.sandbox.reason}. Commands are protected by approvals only.`);
     if (session.repairedToolCalls) notices.push(`Repaired ${session.repairedToolCalls} tool call(s) interrupted in the previous run.`);
     if (session.instructions.length) notices.push(`Instructions: ${session.instructions.map((i) => i.path).join(", ")}`);
     const instance = render(
@@ -108,7 +150,7 @@ export async function main(argv: string[]): Promise<number> {
         provider,
         bridge,
         initialSession: session,
-        newSession: () => make(),
+        newSession: (id?: string) => make(id),
         notices,
         ...(args.prompt ? { initialPrompt: args.prompt } : {}),
       }),
@@ -126,3 +168,11 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
+
+function requireSandbox(session: SessionHandle): boolean {
+  if (session.sandbox.mode === "required" && !session.sandbox.runner) {
+    process.stderr.write(`sutra: sandbox.mode is "required" but no OS sandbox is available: ${session.sandbox.reason}.\n`);
+    return false;
+  }
+  return true;
+}

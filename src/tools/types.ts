@@ -4,6 +4,7 @@ import type { SecretRedactor } from "../permissions/sensitive.js";
 import type { Workspace } from "../permissions/paths.js";
 import type { PlanStore } from "../core/planning/plan.js";
 import type { FileStateTracker } from "./file-state.js";
+import type { SandboxRunner } from "../sandbox/sandbox.js";
 
 export interface ToolContext {
   workspace: Workspace;
@@ -23,6 +24,12 @@ export interface ToolContext {
   };
   /** Live output from long-running tools (shell). UI only; not sent to the model. */
   onProgress?: (chunk: string) => void;
+  /** OS sandbox for shell commands; null when unavailable or disabled. */
+  sandbox?: SandboxRunner | null;
+  /** Refuse to run commands when no sandbox is available. */
+  sandboxRequired?: boolean;
+  /** This call was approved as a network command, so the sandbox lets it out. */
+  allowNetwork?: boolean;
 }
 
 export type ToolErrorCode =

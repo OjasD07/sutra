@@ -13,4 +13,6 @@ export const paths = {
   database: () => join(sutraHome(), "sutra.db"),
   logs: () => join(sutraHome(), "logs"),
   toolLogs: (sessionId: string) => join(sutraHome(), "logs", "tools", sessionId),
+  exports: () => join(sutraHome(), "exports"),
+  bench: () => join(sutraHome(), "bench"),
 };

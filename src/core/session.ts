@@ -16,6 +16,7 @@ import { FileStateTracker } from "../tools/file-state.js";
 import { createDefaultRegistry, type ToolRegistry } from "../tools/registry.js";
 import { detectTestCommand } from "../tools/shell/shell-tools.js";
 import { AgentRuntime } from "./agent/runtime.js";
+import { createSandbox, type SandboxStatus } from "../sandbox/sandbox.js";
 import type { ApprovalRequest } from "./events/types.js";
 import { PlanStore } from "./planning/plan.js";
 
@@ -33,6 +34,7 @@ export interface SessionHandle {
   /** Messages restored from the store (for transcript replay in the UI). */
   restored: Message[];
   repairedToolCalls: number;
+  sandbox: SandboxStatus;
 }
 
 export interface OpenSessionOptions {
@@ -43,6 +45,8 @@ export interface OpenSessionOptions {
   approve: (req: ApprovalRequest) => Promise<ApprovalChoice>;
   resumeId?: string;
   tools?: ToolRegistry;
+  /** Override sandbox detection (tests). */
+  sandbox?: SandboxStatus;
 }
 
 export function contextBudget(config: SutraConfig, provider: ModelProvider, model: string) {
@@ -108,6 +112,14 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
     if (cp?.fileState) fileState = FileStateTracker.fromJSON(cp.fileState as never);
   }
 
+  const sandbox =
+    o.sandbox ??
+    createSandbox(config.sandbox.mode, {
+      workspace: workspace.root,
+      allowWrite: config.sandbox.allowWrite.map((d) => workspace.resolve(d).absolute),
+      network: config.sandbox.network,
+    });
+
   const redactor = new SecretRedactor();
   redactor.add(config.providers.deepseek.apiKey);
   const instructions = loadInstructions(workspace.root);
@@ -128,6 +140,7 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
     usage,
     config,
     approve: o.approve,
+    sandbox,
     toolLogDir: paths.toolLogs(record.id),
     // Kept stable within a session so the provider's prefix cache stays warm;
     // the plan reaches the model through update_plan results instead.
@@ -147,5 +160,5 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
       }),
   });
 
-  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired };
+  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired, sandbox };
 }

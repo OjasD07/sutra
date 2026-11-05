@@ -4,6 +4,8 @@ import type { SessionHandle } from "../core/session.js";
 import type { SessionStore } from "../memory/store.js";
 import type { ModelProvider } from "../providers/types.js";
 import { formatUsd, type UsageTotals } from "../telemetry/cost.js";
+import { sandboxSummary } from "../sandbox/sandbox.js";
+import { exportAudit } from "./audit-command.js";
 
 export interface CommandContext {
   session: SessionHandle;
@@ -15,7 +17,9 @@ export interface CommandContext {
 
 export interface CommandResult {
   output: string;
-  action?: "exit" | "clear";
+  action?: "exit" | "clear" | "resume";
+  /** For action "resume": the session to switch to. */
+  sessionId?: string;
 }
 
 export const COMMANDS: { name: string; args?: string; help: string }[] = [
@@ -28,7 +32,9 @@ export const COMMANDS: { name: string; args?: string; help: string }[] = [
   { name: "compact", help: "Summarise older context now" },
   { name: "clear", help: "Start a fresh session (history stays on disk)" },
   { name: "permissions", args: "[inspect|confirm|flow]", help: "Show or change the permission profile" },
-  { name: "sessions", help: "List recent sessions for this workspace" },
+  { name: "sessions", args: "[id]", help: "Browse recent sessions in this workspace and resume one" },
+  { name: "resume", args: "<id>", help: "Switch to a saved session" },
+  { name: "export", args: "[md|json]", help: "Write an audit report of this session (~/.sutra/exports)" },
   { name: "exit", help: "Exit Sutra" },
 ];
 
@@ -78,7 +84,7 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
     case "?": {
       const cmds = COMMANDS.map((c) => `  /${(c.name + (c.args ? " " + c.args : "")).padEnd(32)}${c.help}`).join("\n");
       return {
-        output: `Commands\n${cmds}\n\nKeys\n  Enter        send\n  Esc          cancel the running turn\n  Ctrl+C       cancel, or exit when idle (twice)\n  Up / Down    input history\n\nApproval prompts: y = yes once, a = allow for this session, n / Enter = no.`,
+        output: `Commands  (type / to browse; ▾ commands open a list of choices)\n${cmds}\n\nKeys\n  Enter        send\n  Esc          cancel the running turn\n  Ctrl+C       cancel, or exit when idle (twice)\n  Up / Down    input history\n\nApproval prompts: y = yes once, a = allow for this session, n / Enter = no.`,
       };
     }
     case "model": {
@@ -101,6 +107,7 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
         `Model        ${rt.model} (context ${n(info.contextWindow)}, budget ${n(session.context.budget.limit)})`,
         `Thinking     ${info.supportsThinking ? `${config.thinking} (effort ${config.reasoningEffort})` : "not supported"}`,
         `Permission   ${session.permissions.policy.profile}`,
+        `Sandbox      ${sandboxSummary(session.sandbox)}`,
         `Context      ~${n(est)} tokens per request; compacts at ${(session.context.budget.threshold * 100).toFixed(0)}%`,
         `Instructions ${session.instructions.length ? session.instructions.map((i) => i.path).join(", ") : "none"}`,
         `Spend        ${formatCost(session.usage.totals)}`,
@@ -147,10 +154,26 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
       return { output: `Permission profile set to ${arg}. Session grants cleared.` };
     }
     case "sessions": {
+      if (arg) return runSlashCommand(`/resume ${arg}`, ctx);
       const list = store.listSessions(session.workspace.root, 15);
       if (!list.length) return { output: "No sessions for this workspace." };
       const rows = list.map((s) => `  ${s.id.slice(0, 8)}  ${s.updatedAt.slice(0, 16).replace("T", " ")}  ${s.status.padEnd(15)} ${s.title ?? "(untitled)"}${s.id === session.record.id ? "  ← current" : ""}`);
-      return { output: `Recent sessions\n${rows.join("\n")}\n\nResume with: sutra --session <id>` };
+      return { output: `Recent sessions\n${rows.join("\n")}\n\nResume one with /resume <id>, or type /sessions and pick from the list.` };
+    }
+    case "export": {
+      const format = (arg || "md").toLowerCase();
+      if (format !== "md" && format !== "json") return { output: "Usage: /export [md|json]" };
+      const file = exportAudit(store, session.record.id, format);
+      return { output: `Wrote a ${format === "md" ? "Markdown" : "JSON"} audit of this session to ${tildify(file)}\nReplay it any time with: sutra replay ${session.record.id.slice(0, 8)}` };
+    }
+    case "resume": {
+      if (!arg) return { output: "Usage: /resume <session id>  (or pick one with /sessions)" };
+      if (rt.isRunning) return { output: "Wait for the current turn to finish (or cancel it) before switching sessions." };
+      const target = store.getSession(arg);
+      if (!target) return { output: `No session matching "${arg}".` };
+      if (target.id === session.record.id) return { output: "That is the current session." };
+      if (target.workspace !== session.workspace.root) return { output: `Session ${target.id.slice(0, 8)} belongs to ${tildify(target.workspace)}; run Sutra there to resume it.` };
+      return { output: "", action: "resume", sessionId: target.id };
     }
     case "exit":
     case "quit":

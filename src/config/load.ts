@@ -5,7 +5,10 @@ import { paths } from "./paths.js";
 import { DEFAULT_PRICING } from "./pricing.js";
 import { ConfigSchema, ProjectConfigSchema, type PermissionProfile, type SutraConfig } from "./schema.js";
 
+export const PROVIDER_IDS = ["deepseek", "openai-compatible", "ollama"] as const;
+
 export interface CliOverrides {
+  provider?: string;
   model?: string;
   profile?: PermissionProfile;
   thinking?: "enabled" | "disabled";
@@ -38,13 +41,18 @@ function deepMerge<T>(base: T, over: unknown): T {
   return out as T;
 }
 
-export function readCredentials(): { deepseekApiKey?: string } {
-  const raw = readJson(paths.credentials()) as { deepseekApiKey?: string } | undefined;
+export interface Credentials {
+  deepseekApiKey?: string;
+  openaiApiKey?: string;
+}
+
+export function readCredentials(): Credentials {
+  const raw = readJson(paths.credentials()) as Credentials | undefined;
   return raw ?? {};
 }
 
 /** Store credentials outside any repository, readable only by the user. */
-export function writeCredentials(update: { deepseekApiKey?: string }): string {
+export function writeCredentials(update: Credentials): string {
   const file = paths.credentials();
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const next = { ...readCredentials(), ...update };
@@ -96,8 +104,13 @@ export function loadConfig(workspace: string, cli: CliOverrides = {}, env = proc
   const config = parsed.data;
 
   // Environment
+  if (env.SUTRA_PROVIDER) config.provider = env.SUTRA_PROVIDER;
+  if (cli.provider) config.provider = cli.provider;
   if (env.DEEPSEEK_BASE_URL) config.providers.deepseek.baseUrl = env.DEEPSEEK_BASE_URL;
-  if (env.DEEPSEEK_MODEL) config.model = env.DEEPSEEK_MODEL;
+  if (env.OPENAI_BASE_URL) config.providers.openai.baseUrl = env.OPENAI_BASE_URL;
+  if (env.OLLAMA_HOST) config.providers.ollama.baseUrl = ollamaUrl(env.OLLAMA_HOST);
+  if (env.DEEPSEEK_MODEL && config.provider === "deepseek") config.model = env.DEEPSEEK_MODEL;
+  if (env.SUTRA_MODEL) config.model = env.SUTRA_MODEL;
   if (env.SUTRA_PROFILE && ["inspect", "confirm", "flow"].includes(env.SUTRA_PROFILE))
     config.permissions.profile = env.SUTRA_PROFILE as PermissionProfile;
 
@@ -116,13 +129,25 @@ export function loadConfig(workspace: string, cli: CliOverrides = {}, env = proc
     config.providers.deepseek.apiKey = env.DEEPSEEK_API_KEY;
     apiKeySource = "env";
   }
+  if (creds.openaiApiKey) config.providers.openai.apiKey = creds.openaiApiKey;
+  if (env.OPENAI_API_KEY) config.providers.openai.apiKey = env.OPENAI_API_KEY;
+  if (config.provider !== "deepseek") apiKeySource = config.provider === "openai-compatible" && config.providers.openai.apiKey ? (env.OPENAI_API_KEY ? "env" : "credentials") : "none";
 
   // CLI
   if (cli.model) config.model = cli.model;
   if (cli.profile) config.permissions.profile = cli.profile;
   if (cli.thinking) config.thinking = cli.thinking;
 
-  config.model ??= DEFAULT_DEEPSEEK_MODEL;
+  if (!(PROVIDER_IDS as readonly string[]).includes(config.provider))
+    throw new Error(`Unknown provider "${config.provider}". Use one of: ${PROVIDER_IDS.join(", ")}`);
+  // Other providers have no universal default; Sutra asks the server for its models at startup.
+  if (config.provider === "deepseek") config.model ??= DEFAULT_DEEPSEEK_MODEL;
   config.pricing = { ...DEFAULT_PRICING, ...config.pricing };
   return { config, apiKeySource, warnings };
+}
+
+/** OLLAMA_HOST is "host:port" or a URL; Sutra needs the OpenAI-compatible /v1 base. */
+export function ollamaUrl(host: string): string {
+  const withScheme = /^https?:\/\//.test(host) ? host : `http://${host}`;
+  return withScheme.replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1";
 }

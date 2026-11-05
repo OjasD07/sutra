@@ -123,6 +123,8 @@ export interface ModelCapabilities {
 export interface ModelProvider {
   readonly id: string;
   readonly displayName: string;
+  /** True for local inference, where requests have no per-token price. */
+  readonly freeOfCharge?: boolean;
   getCapabilities(): ModelCapabilities;
   getModelInfo(model: string): ModelInfo;
   /**

@@ -11,6 +11,8 @@ export interface CommandAssessment {
   risk: CommandRisk;
   reasons: string[];
   compound: boolean;
+  /** Some segment needs the network (independent of the overall risk). */
+  network: boolean;
 }
 
 const PRIVILEGED = /^(sudo|su|doas|pkexec)$/;
@@ -134,6 +136,7 @@ export function assessCommand(command: string, extraRoutinePrefixes: string[] = 
   const { segments, substitution, redirect, background } = splitCommand(command);
   const compound = segments.length > 1 || substitution || redirect || background;
   let worst: CommandRisk = "routine";
+  let needsNetwork = false;
   const rank: Record<CommandRisk, number> = { routine: 0, unknown: 1, network: 2, destructive: 3, privileged: 4 };
   const bump = (r: CommandRisk, why?: string) => {
     if (why && !reasons.includes(why)) reasons.push(why);
@@ -155,11 +158,14 @@ export function assessCommand(command: string, extraRoutinePrefixes: string[] = 
     const destructive = DESTRUCTIVE_RULES.find(([r]) => r.test(seg));
     if (destructive) bump("destructive", destructive[1]);
     const network = NETWORK_RULES.find(([r]) => r.test(seg));
-    if (network) bump("network", network[1]);
+    if (network) {
+      bump("network", network[1]);
+      needsNetwork = true;
+    }
     if (destructive || network) continue;
     const routine = ROUTINE.some((r) => r.test(seg)) || extraRoutinePrefixes.some((p) => p && (seg === p || seg.startsWith(p + " ")));
     if (!routine) bump("unknown");
   }
   if (segments.length === 0) bump("unknown", "empty command");
-  return { risk: worst, reasons, compound };
+  return { risk: worst, reasons, compound, network: needsNetwork };
 }

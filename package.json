@@ -12,6 +12,7 @@
   "files": [
     "dist",
     "assets",
+    "benchmarks",
     "README.md",
     "LICENSE",
     "NOTICE"

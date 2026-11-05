@@ -2,13 +2,13 @@ import { Box, Text, useInput, usePaste, useWindowSize } from "ink";
 import React, { useEffect, useMemo, useState } from "react";
 import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
-import { COMMANDS } from "../cli/commands.js";
 import type { ApprovalRequest, TurnResult } from "../core/events/types.js";
 import type { Plan } from "../core/planning/plan.js";
 import { t } from "../i18n/index.js";
 import type { ApprovalChoice } from "../permissions/engine.js";
 import { formatUsd } from "../telemetry/cost.js";
 import { parseUnifiedDiff, renderMarkdown } from "./highlight.js";
+import type { Suggestion, SuggestionList } from "./suggestions.js";
 import { threadGlyphs, type Theme } from "./theme.js";
 
 export interface UiOptions {
@@ -85,6 +85,7 @@ export function Welcome(props: {
   workspace: string;
   profile: string;
   session?: string;
+  sandbox?: string;
   instructions: { path: string; scope: string }[];
   notices: string[];
 }) {
@@ -132,6 +133,7 @@ export function Welcome(props: {
             <Text color={muted}>{PROFILE_HINT[profileKey] ?? ""}</Text>
           </>,
         )}
+        {props.sandbox ? row("Sandbox", <Text color={/unavailable|off/.test(props.sandbox) ? muted : undefined}>{props.sandbox}</Text>) : null}
         {props.instructions.length
           ? row(
               "Instructions",
@@ -588,15 +590,26 @@ export function TurnSummary(props: { ui: UiOptions; result: TurnResult; budgetUs
 // -------------------------------------------------------------------- input
 
 export interface PaletteState {
-  matches: number;
+  kind: "commands" | "choices";
+  count: number;
 }
 
-function paletteRows(value: string): { matches: typeof COMMANDS; rest: typeof COMMANDS } | null {
-  if (!value.startsWith("/") || /\s/.test(value)) return null;
-  const q = value.slice(1).toLowerCase();
-  const matches = COMMANDS.filter((c) => c.name.startsWith(q));
-  const rest = q ? COMMANDS.filter((c) => !c.name.startsWith(q)) : [];
-  return { matches, rest };
+/** First selectable row: the current value if there is one, else the first enabled row. */
+function initialSelection(list: SuggestionList | null): number {
+  if (!list) return 0;
+  const cur = list.items.findIndex((i) => i.current && !i.disabled);
+  if (cur >= 0) return cur;
+  const first = list.items.findIndex((i) => !i.disabled && !i.dim);
+  return first >= 0 ? first : 0;
+}
+
+function step(list: SuggestionList, from: number, dir: 1 | -1): number {
+  const n = list.items.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (from + dir * k + n) % n;
+    if (!list.items[i]!.disabled) return i;
+  }
+  return from;
 }
 
 export function InputBox(props: {
@@ -607,6 +620,7 @@ export function InputBox(props: {
   onSubmit: (v: string) => void;
   onInterrupt: () => void;
   onPalette: (p: PaletteState | null) => void;
+  suggest: (value: string) => SuggestionList | null;
   placeholder: string;
 }) {
   const { ui } = props;
@@ -616,23 +630,30 @@ export function InputBox(props: {
   const [hist, setHist] = useState(-1);
   const [sel, setSel] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const palette = dismissed ? null : paletteRows(value);
-  const open = !!palette && palette.matches.length > 0;
+  const list = useMemo(() => (dismissed ? null : props.suggest(value)), [dismissed, value, props.suggest]);
+  const open = !!list && (list.items.length > 0 || list.kind === "choices");
+  const selectable = !!list && list.items.some((i) => !i.disabled);
 
   useEffect(() => {
-    props.onPalette(open ? { matches: palette!.matches.length } : null);
+    props.onPalette(open ? { kind: list!.kind, count: list!.items.filter((i) => !i.dim).length } : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, palette?.matches.length]);
+  }, [open, list?.kind, list?.items.length]);
 
   const set = (v: string, c = v.length) => {
     setValue(v);
     setCursor(c);
-    setSel(0);
+    setSel(initialSelection(props.suggest(v)));
     setDismissed(false);
   };
   const insert = (text: string) => set(value.slice(0, cursor) + text + value.slice(cursor), cursor + text.length);
 
   usePaste((text: string) => insert(text.replace(/\r\n?/g, "\n")), { isActive: props.active });
+
+  const submit = (v: string) => {
+    set("");
+    setHist(-1);
+    props.onSubmit(v);
+  };
 
   useInput(
     (input, key) => {
@@ -645,14 +666,13 @@ export function InputBox(props: {
         setDismissed(true);
         return;
       }
-      if (open && (key.upArrow || key.downArrow)) {
-        const n = palette!.matches.length;
-        setSel((s) => (key.upArrow ? (s - 1 + n) % n : (s + 1) % n));
+      if (open && selectable && (key.upArrow || key.downArrow)) {
+        setSel((s) => step(list!, s, key.upArrow ? -1 : 1));
         return;
       }
-      if (open && key.tab) {
-        const c = palette!.matches[sel]!;
-        set(`/${c.name}${c.args ? " " : ""}`);
+      if (open && selectable && key.tab) {
+        const item = list!.items[sel]!;
+        if (!item.disabled) set(item.fill ?? item.submit ?? value);
         return;
       }
       if (key.return) {
@@ -660,10 +680,14 @@ export function InputBox(props: {
           insert("\n");
           return;
         }
-        const v = open ? `/${palette!.matches[sel]!.name}` : value;
-        set("");
-        setHist(-1);
-        props.onSubmit(v);
+        if (open && selectable) {
+          const item = list!.items[sel]!;
+          if (item.disabled) return;
+          if (item.submit) submit(item.submit);
+          else if (item.fill) set(item.fill);
+          return;
+        }
+        submit(value);
         return;
       }
       if (key.backspace || key.delete) {
@@ -719,37 +743,71 @@ export function InputBox(props: {
           </Text>
         )}
       </Box>
-      {open ? <Palette ui={ui} rows={palette!} selected={sel} /> : null}
+      {open ? <Palette ui={ui} list={list!} selected={sel} /> : null}
     </Box>
   );
 }
 
-function Palette(props: { ui: UiOptions; rows: { matches: typeof COMMANDS; rest: typeof COMMANDS }; selected: number }) {
-  const { ui, rows } = props;
+const MAX_ROWS = 9;
+
+function Palette(props: { ui: UiOptions; list: SuggestionList; selected: number }) {
+  const { ui, list } = props;
   const th = ui.theme;
   const width = useContentWidth();
-  const line = (c: (typeof COMMANDS)[number], kind: "selected" | "match" | "rest") => {
-    const name = `/${c.name}`.padEnd(13);
-    const args = (c.args ?? "").padEnd(24);
-    const text = truncate(`${kind === "selected" ? "▸ " : "  "}${name}${c.args ? args : ""}${c.help}`, width - 4);
-    const padded = text + " ".repeat(Math.max(0, width - 4 - stringWidth(text)));
-    if (kind === "selected")
+  const inner = width - 4;
+  const labelW = Math.min(22, Math.max(10, ...list.items.map((i) => stringWidth(i.label) + 2)));
+  const detailW = Math.min(30, Math.max(0, ...list.items.map((i) => (i.detail ? stringWidth(i.detail) + 2 : 0))));
+
+  // Keep the selection in view.
+  const n = list.items.length;
+  const start = n <= MAX_ROWS ? 0 : Math.min(Math.max(0, props.selected - Math.floor(MAX_ROWS / 2)), n - MAX_ROWS);
+  const visible = list.items.slice(start, start + MAX_ROWS);
+  const firstDim = list.items.findIndex((i) => i.dim);
+
+  const row = (item: Suggestion, index: number) => {
+    const selected = index === props.selected;
+    const mark = selected ? "▸ " : "  ";
+    const cur = item.current ? (ui.color ? "● " : "* ") : "  ";
+    const label = truncate(item.label, labelW - 1).padEnd(labelW);
+    const detail = truncate(item.detail ?? "", Math.max(0, detailW - 1)).padEnd(detailW);
+    const hint = item.disabled ? `${item.disabled}` : (item.hint ?? "");
+    const text = truncate(`${mark}${cur}${label}${detail}${hint}`, inner);
+    if (selected && !item.disabled) {
+      const padded = text + " ".repeat(Math.max(0, inner - stringWidth(text)));
       return (
-        <Text key={c.name} color={col(ui, th.accent)} bold {...(ui.color ? { backgroundColor: th.selectBg } : {})}>
+        <Text key={item.key} color={col(ui, th.accent)} bold {...(ui.color ? { backgroundColor: th.selectBg } : {})}>
           {ui.color ? padded : text}
         </Text>
       );
+    }
+    const muted = item.dim || item.disabled;
     return (
-      <Text key={c.name} color={kind === "rest" ? col(ui, th.muted) : undefined}>
-        {text}
+      <Text key={item.key} wrap="truncate-end">
+        <Text color={col(ui, muted ? th.muted : undefined)}>{mark}</Text>
+        <Text color={col(ui, item.current ? th.accent : th.muted)}>{cur}</Text>
+        <Text color={col(ui, muted ? th.muted : undefined)} bold={!muted && list.kind === "choices"}>
+          {label}
+        </Text>
+        <Text color={col(ui, th.muted)}>{detail}</Text>
+        <Text color={col(ui, muted ? th.faint : th.muted)}>{truncate(hint, Math.max(0, inner - 4 - labelW - detailW))}</Text>
       </Text>
     );
   };
+
   return (
     <Box flexDirection="column" borderStyle="round" borderTop={false} borderColor={col(ui, th.border)} {...(ui.color ? { backgroundColor: th.panel } : {})} paddingX={1}>
-      {rows.matches.map((c, i) => line(c, i === props.selected ? "selected" : "match"))}
-      {rows.rest.length ? <Text color={col(ui, th.faint)}>{"  " + "─".repeat(Math.max(10, width - 8))}</Text> : null}
-      {rows.rest.map((c) => line(c, "rest"))}
+      {list.title ? <Text color={col(ui, th.muted)}>{list.title}</Text> : null}
+      {start > 0 ? <Text color={col(ui, th.faint)}>{`  ↑ ${start} more`}</Text> : null}
+      {visible.map((item, i) => {
+        const index = start + i;
+        return (
+          <React.Fragment key={item.key}>
+            {index === firstDim && firstDim > 0 ? <Text color={col(ui, th.faint)}>{"  " + "─".repeat(Math.max(10, inner - 4))}</Text> : null}
+            {row(item, index)}
+          </React.Fragment>
+        );
+      })}
+      {start + MAX_ROWS < n ? <Text color={col(ui, th.faint)}>{`  ↓ ${n - start - MAX_ROWS} more`}</Text> : null}
     </Box>
   );
 }

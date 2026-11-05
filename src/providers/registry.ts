@@ -1,5 +1,6 @@
 import type { SutraConfig } from "../config/schema.js";
 import { DeepSeekProvider } from "./deepseek/provider.js";
+import { OpenAICompatibleProvider } from "./openai-compatible/provider.js";
 import type { ModelProvider } from "./types.js";
 
 /**
@@ -34,3 +35,44 @@ registerProvider("deepseek", (config) => {
     models: ds.models,
   });
 });
+
+registerProvider("openai-compatible", (config) => {
+  const o = config.providers.openai;
+  return new OpenAICompatibleProvider({
+    id: "openai-compatible",
+    displayName: "OpenAI-compatible",
+    ...(o.apiKey ? { apiKey: o.apiKey } : {}),
+    baseUrl: o.baseUrl,
+    dialect: "openai",
+    freeOfCharge: o.freeOfCharge,
+    defaultContextWindow: o.contextWindow,
+    models: o.models,
+    ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}),
+  });
+});
+
+registerProvider("ollama", (config) => {
+  const o = config.providers.ollama;
+  return new OpenAICompatibleProvider({
+    id: "ollama",
+    displayName: "Ollama",
+    baseUrl: o.baseUrl,
+    dialect: "openai",
+    freeOfCharge: true,
+    defaultContextWindow: o.contextWindow,
+    models: o.models,
+    // Local models can take a while to load on first use.
+    timeoutMs: o.timeoutMs ?? 30 * 60_000,
+    idleTimeoutMs: 10 * 60_000,
+  });
+});
+
+/** Whether the configured provider needs an API key before it can start. */
+export function providerNeedsKey(config: SutraConfig): { needed: boolean; envVar?: string } {
+  if (config.provider === "deepseek") return { needed: !config.providers.deepseek.apiKey, envVar: "DEEPSEEK_API_KEY" };
+  if (config.provider === "openai-compatible") {
+    const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/)/.test(config.providers.openai.baseUrl);
+    return { needed: !local && !config.providers.openai.apiKey, envVar: "OPENAI_API_KEY" };
+  }
+  return { needed: false };
+}

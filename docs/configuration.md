@@ -22,7 +22,11 @@ Set `SUTRA_HOME` to relocate `~/.sutra`.
 | --- | --- |
 | `DEEPSEEK_API_KEY` | API key (takes precedence over credentials.json) |
 | `DEEPSEEK_BASE_URL` | default `https://api.deepseek.com` |
-| `DEEPSEEK_MODEL` | e.g. `deepseek-flash`, `deepseek-v4-pro` |
+| `DEEPSEEK_MODEL` | e.g. `deepseek-flash`, `deepseek-v4-pro` (DeepSeek only) |
+| `SUTRA_PROVIDER` | `deepseek` (default), `ollama` or `openai-compatible` |
+| `SUTRA_MODEL` | model for any provider |
+| `OPENAI_BASE_URL` / `OPENAI_API_KEY` | endpoint and key for `openai-compatible` |
+| `OLLAMA_HOST` | Ollama address, e.g. `127.0.0.1:11434` (Sutra adds `/v1`) |
 | `SUTRA_PROFILE` | `inspect` / `confirm` / `flow` |
 | `SUTRA_LANG` | `en` / `hi` |
 | `SUTRA_HOME` | state directory |
@@ -67,6 +71,56 @@ Sutra does not read `.env` files. See [security.md](security.md) for why.
 ```
 
 `allowCommands` adds prefixes that `flow` treats as routine. Destructive, network and compound commands still ask.
+
+## Providers
+
+| `provider` | Endpoint | Key | Cost |
+| --- | --- | --- | --- |
+| `deepseek` | `providers.deepseek.baseUrl` (default `https://api.deepseek.com`) | `DEEPSEEK_API_KEY` or `sutra init` | DeepSeek prices (below) |
+| `ollama` | `providers.ollama.baseUrl` (default `http://localhost:11434/v1`) | none | $0 |
+| `openai-compatible` | `providers.openai.baseUrl` (default `https://api.openai.com/v1`) | `OPENAI_API_KEY`; optional for `localhost` | `pricing.<model>` if set; $0 when `providers.openai.freeOfCharge` is true; otherwise "unknown" |
+
+For Ollama and OpenAI-compatible servers there is no built-in default model. Sutra uses `model` from your config or `--model`; if neither is set, it uses the first model the server lists and tells you so.
+
+```json
+{
+  "provider": "ollama",
+  "model": "qwen3-coder",
+  "providers": { "ollama": { "contextWindow": 32768 } }
+}
+```
+
+```json
+{
+  "provider": "openai-compatible",
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "providers": {
+    "openai": {
+      "baseUrl": "http://localhost:8000/v1",
+      "freeOfCharge": true,
+      "contextWindow": 65536
+    }
+  }
+}
+```
+
+**Context windows for local models.** Sutra can't reliably learn a local server's context length, so it assumes `providers.ollama.contextWindow` (default 32768) or `providers.openai.contextWindow` (default 128000) for models without metadata. Make these match your server. Ollama in particular **silently truncates** prompts longer than its configured context (`OLLAMA_CONTEXT_LENGTH`, or the model's `num_ctx`), which shows up as the agent "forgetting" the task.
+
+The OpenAI-compatible adapter sends standard Chat Completions (streaming, `tools`, `stream_options.include_usage`). It reads streamed reasoning from `reasoning_content` or `reasoning` (Ollama, OpenRouter) for progress display, but doesn't send it back, because generic servers don't expect it.
+
+## Sandbox
+
+```json
+{ "sandbox": { "mode": "auto", "network": false, "allowWrite": [] } }
+```
+
+| Key | |
+| --- | --- |
+| `mode` | `auto` (default): use the OS sandbox when available. `required`: refuse to run commands without it. `off`: approvals only. Also `--sandbox <mode>` |
+| `network` | `true` allows outbound network for every command. Default `false`: only commands approved as network commands get it |
+| `allowWrite` | extra directories (relative to the workspace, or absolute) commands may write to |
+
+See [security.md](security.md) for what the sandbox enforces.
 
 ## Models
 

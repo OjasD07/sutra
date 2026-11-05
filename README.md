@@ -11,14 +11,16 @@
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-F5B84B?style=flat-square&labelColor=101923"></a>
   <img alt="Node.js 22.13+" src="https://img.shields.io/badge/node-%E2%89%A5%2022.13-52B788?style=flat-square&labelColor=101923">
   <img alt="Status: early preview" src="https://img.shields.io/badge/status-early%20preview-6CA8E8?style=flat-square&labelColor=101923">
-  <img alt="Model: DeepSeek" src="https://img.shields.io/badge/model-DeepSeek-9CAABA?style=flat-square&labelColor=101923">
+  <img alt="Models: DeepSeek, Ollama, OpenAI-compatible" src="https://img.shields.io/badge/models-DeepSeek%20%C2%B7%20Ollama%20%C2%B7%20OpenAI--compatible-9CAABA?style=flat-square&labelColor=101923">
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#using-sutra">Using Sutra</a> ·
-  <a href="#staying-in-control">Permissions</a> ·
+  <a href="#staying-in-control">Permissions & sandbox</a> ·
   <a href="#cost-and-budgets">Cost</a> ·
+  <a href="#audit-and-replay">Audit</a> ·
+  <a href="#benchmarks">Benchmarks</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="docs/">Docs</a>
 </p>
@@ -29,11 +31,11 @@
 
 Three ideas shape it:
 
-- **You can see everything.** Every file read, edit, command and test run appears on screen as it happens, and is saved to a local history you can resume.
-- **You stay in charge.** Sutra itself decides what may run without asking, so a clever prompt or a malicious file can't talk it into skipping your approval.
-- **You know what it costs.** Token usage and estimated spend are tracked per request, and a budget can pause the agent before it overspends.
+- **You can see everything.** Every file read, edit, command and test run appears on screen as it happens, is saved locally, and can be replayed or exported as an audit report afterwards.
+- **You stay in charge.** Sutra itself decides what may run without asking, and on macOS and Linux every command also runs inside an OS sandbox. A clever prompt or a malicious file can't talk its way past either.
+- **You know what it costs.** Token usage and estimated spend are tracked per request, a budget can pause the agent before it overspends, and a built-in benchmark measures cost per solved task.
 
-Sutra runs on [DeepSeek](https://api-docs.deepseek.com/) today. The agent talks to models through a small provider interface, so other providers can be added without touching the core.
+Sutra works with [DeepSeek](https://api-docs.deepseek.com/) in the cloud, with **local models through [Ollama](https://ollama.com)** (free and private), and with any OpenAI-compatible server: vLLM, LM Studio, llama.cpp, OpenRouter or OpenAI itself.
 
 ## See it work
 
@@ -98,20 +100,24 @@ npm run build
 npm link        # puts the `sutra` command on your PATH
 ```
 
-**2. Connect a model.** Get an API key from the [DeepSeek platform](https://platform.deepseek.com/api_keys), then run:
+**2. Connect a model.** Run the guided setup:
 
 ```bash
 sutra init
 ```
 
-The setup walks you through choosing a provider and model and stores your key safely (more below). It also checks that the API is reachable and, only if you say yes, sends one tiny test request.
+It asks which provider you want and lists the models your server actually has. If the provider needs a key, it stores it safely (more below). It then checks the connection and, only if you say yes, sends one tiny test request.
 
-Prefer environment variables? Set these instead:
+You can also skip setup and use flags or environment variables:
 
-```bash
-export DEEPSEEK_API_KEY=sk-...
-export DEEPSEEK_MODEL=deepseek-flash      # or deepseek-v4-pro
-```
+| Provider | How |
+| --- | --- |
+| **DeepSeek** (cloud) | `export DEEPSEEK_API_KEY=sk-...` — get a key from the [DeepSeek platform](https://platform.deepseek.com/api_keys) |
+| **Ollama** (local, free) | `ollama pull qwen3-coder`, then `sutra --provider ollama` |
+| **Any OpenAI-compatible server** | `export OPENAI_BASE_URL=http://localhost:8000/v1` (plus `OPENAI_API_KEY` if it needs one), then `sutra --provider openai-compatible --model <id>` |
+
+> [!TIP]
+> Ollama's default context window is small and it **silently cuts off** longer prompts. For coding work, start the server with `OLLAMA_CONTEXT_LENGTH=32768 ollama serve` (or more), and set `providers.ollama.contextWindow` to the same number. Smaller local models also handle multi-step tool use less reliably than large cloud models, and `sutra bench` will tell you how yours does.
 
 **3. Try it on the example.**
 
@@ -143,13 +149,17 @@ sutra --resume "What did you change?"
 | `sutra -p "summarise src/auth"` | Run once without the UI: the answer goes to stdout, activity to stderr |
 | `sutra -p --json "…"` | Same, but print every runtime event as a JSON line |
 | `sutra --readonly` | Look, don't touch: no edits, no commands |
+| `sutra --provider ollama` | Use a local model (`deepseek`, `ollama` or `openai-compatible`) |
+| `sutra replay` | Show the latest session here as a timeline |
+| `sutra export --format md` | Write an audit report of a session |
+| `sutra bench` | Run the benchmark tasks and report pass rate and cost |
 | `sutra --model deepseek-v4-pro` | Pick a model for this session |
 | `sutra --no-color` | Plain output (`NO_COLOR` also works) |
 | `sutra --lang hi` | Hindi interface text |
 
 ### Inside a session
 
-Type `/` to open the command palette. ↑↓ selects a command, Tab completes it, and Enter runs it.
+Type `/` to open the command palette. ↑↓ selects a command and Enter runs it. Commands marked **▾** (`/model`, `/permissions`, `/budget`, `/sessions`, `/resume`) open a dropdown of real choices instead: the current value is pre-selected, typing narrows the list, and Enter applies the one you pick. You can also type a value directly, like `/budget 3.5` or `/model my-model-id`. Esc closes any list.
 
 | Command | |
 | --- | --- |
@@ -161,7 +171,9 @@ Type `/` to open the command palette. ↑↓ selects a command, Tab completes it
 | `/model [id]` | Show or switch the model |
 | `/permissions [profile]` | Show or switch the permission profile |
 | `/compact` | Summarise older context now, to save tokens |
-| `/sessions` | Recent sessions in this directory |
+| `/sessions` | Browse recent sessions in this directory and switch to one |
+| `/resume <id>` | Switch to a saved session without restarting |
+| `/export` | Save an audit report of this session (Markdown or JSON) |
 | `/clear` | Start fresh (the old session stays saved) |
 | `/exit` | Quit |
 
@@ -191,8 +203,22 @@ At an approval prompt, `y` allows the action once. `a` allows that kind of actio
 
 Because these rules live in Sutra's own code, nothing the model reads can change them: not a README, not a code comment, not a crafted test output. Repository instruction files can describe conventions, but they can't loosen permissions.
 
+### The OS sandbox
+
+Approvals decide *whether* a command runs. The sandbox limits *what it can do* once it does, because an approved "test" script can still run anything. On by default (`--sandbox auto`):
+
+| | Inside the sandbox |
+| --- | --- |
+| **Writes** | Only the workspace, temp directories and package-manager caches (`~/.npm`, `~/.cache`, …) |
+| **Credentials** | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.sutra`, `.npmrc`, `.netrc` and keychains can't be read |
+| **Network** | Outbound traffic is blocked; localhost still works for test servers. A command you approve as a network command (like `npm install`) gets network for that run only |
+
+- **macOS** uses the built-in Seatbelt sandbox (`sandbox-exec`). **Linux** uses [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) when it's installed.
+- The welcome screen and `/status` show whether the sandbox is active. If none is available, Sutra says so and relies on approvals alone.
+- Use `--sandbox required` to refuse to run commands without a sandbox, or `--sandbox off` to disable it.
+
 > [!IMPORTANT]
-> Sutra is an **approval gate, not a sandbox**. Once you approve a command, it runs with your normal user permissions, and a "test" script can do anything a script can do. Read commands before you approve them. [docs/security.md](docs/security.md) explains the threat model and its limits.
+> The sandbox is a strong second layer, not a guarantee. It runs commands under your user account with rules for writes, credential reads and the network; it is not a separate machine or container. Read commands before approving them. [docs/security.md](docs/security.md) explains exactly what is enforced, how it was tested, and its limits (the Linux backend is implemented but hasn't been tested on Linux yet).
 
 ## Cost and budgets
 
@@ -216,6 +242,54 @@ Estimated cost    $0.0213
 - **Real prices, clearly dated.** Costs are estimated from DeepSeek's published per-token prices, including cache-hit pricing and off-peak rates. Every report says the date its prices are from, and you can override them in your config.
 - **Budgets.** Set a limit with `/budget 1.00` or in your config. Sutra warns you at 80% of the limit, and pauses before the next request once it's reached.
 - **Built to be cheap.** The system prompt stays the same for a whole session, so DeepSeek's prompt cache keeps working. Context is capped at 200K tokens by default and compacted when it gets large.
+- **Local is free.** With Ollama, or a local OpenAI-compatible server, spend is reported as $0 instead of "unknown". Token counts are still tracked.
+
+## Audit and replay
+
+Every session is a complete local record. Two commands turn it into something you can read or share:
+
+```bash
+sutra replay                   # timeline of the latest session in this directory
+sutra replay 3f2a9c1e          # …or any session by ID
+sutra export --format md       # audit report: summary, every command with exit code and sandbox, full timeline
+sutra export --format json     # the same as structured data (schema sutra.session-audit/v1)
+```
+
+Inside a session, `/export` does the same. A replay looks like this:
+
+```
+08:53:27  › The test suite fails. Find the bug in src/ and fix it.
+08:53:27  │ Reading the code.
+08:53:27  ├─ ✓ read_file       src/session.js  16 lines · 1ms
+          │ deepseek-flash · 1,500 in (1,000 cached) · 120 out · $0.0003 · 29ms
+08:53:27  ├─ ✓ run_tests       node --test test/  exit 1 · 185ms
+08:53:27  ├─ ✓ edit_file       src/session.js  +1 −1 · 13ms
+08:53:27  ├─ ✓ run_tests       node --test test/  exit 0 · 182ms
+08:53:28  │ Fixed; all tests pass.
+
+● 1 turn(s) · 5 requests · 5 tool calls · 7,500 in / 600 out · $0.0015
+```
+
+<sub>Example from a test run against a mock server.</sub>
+
+Reports are written to `~/.sutra/exports/` (outside your repository) with owner-only permissions. The model's private reasoning is never included, and tool output was already redacted for secrets when it was recorded.
+
+## Benchmarks
+
+`sutra bench` measures how well your setup actually solves coding tasks, and what each solved task costs:
+
+```bash
+sutra bench                                        # all bundled tasks, current provider and model
+sutra --provider ollama --model qwen3-coder bench  # compare a local model
+sutra bench --only slugify,pagination --max-cost 0.25
+```
+
+Each task runs in a fresh copy of a small repository, with the Flow profile, in the sandbox, and nobody there to approve anything. The result is judged by the task's own test command, run *after* the agent finishes with the original tests restored. An agent that edits the tests to make them pass still fails. Every run is a normal saved session, so `sutra replay <id>` shows exactly what happened.
+
+The bundled suite has four tasks (a unit-conversion bug, off-by-one pagination, a CSV quoting bug, and implementing a function from its tests). You can add your own; see [docs/benchmarks.md](docs/benchmarks.md). Results are saved as JSON and as a Markdown table in `~/.sutra/bench/`.
+
+> [!NOTE]
+> No benchmark results are published yet. The numbers in this README come from test runs against a mock server, not from real models. Run `sutra bench` against your own provider to get real ones, and please share them.
 
 ## Sessions and memory
 
@@ -264,13 +338,13 @@ Every option, and the order in which settings override each other, is listed in 
 
 ## Status
 
-Sutra is an **early preview (v0.1)**. The core is complete and well tested: the agent loop, all tools, permissions, sessions, compaction, cost tracking and the terminal UI. There are 100 automated tests, including an end-to-end run that fixes the example bug through the real CLI and the real test suite.
+Sutra is an **early preview (v0.1)**. The core is complete and well tested: the agent loop, all tools, permissions, the sandbox, sessions, compaction, cost tracking, audit export, benchmarks and the terminal UI. More than 130 automated tests cover it, including an end-to-end run that fixes the example bug through the real CLI and the real test suite. On macOS they include live sandbox tests that check writes, credential reads and the network are really blocked.
 
 What to know before relying on it:
 
-- **One provider so far.** Only DeepSeek is supported. OpenAI-compatible and local (Ollama) providers are next.
-- **Live API checks are opt-in.** The automated tests talk to a local server that speaks DeepSeek's exact streaming protocol. To check against the real API, run `DEEPSEEK_API_KEY=… npm run test:smoke`; it costs a fraction of a cent.
-- **No OS sandbox.** Approvals are enforced by Sutra, not by the operating system.
+- **Real-model checks are opt-in.** The automated tests talk to a local server that speaks the providers' exact streaming protocol. To check against the real API, run `DEEPSEEK_API_KEY=… npm run test:smoke` (it costs a fraction of a cent), or run `sutra bench`.
+- **Ollama and OpenAI-compatible support is new.** It is tested against the protocol, but not yet against every server. Tool-calling quality depends heavily on the local model.
+- **The sandbox is tested on macOS.** The Linux (bubblewrap) backend is implemented but hasn't been run on Linux yet. There is no Windows backend.
 - **macOS first.** Developed on macOS. Linux should work but isn't covered by CI yet. Windows isn't supported yet.
 - **Costs are estimates.** They use published prices; DeepSeek's holiday discounts aren't modelled.
 
@@ -283,11 +357,14 @@ What to know before relying on it:
 - [x] Saved sessions, resume and context compaction
 - [x] Cost tracking and spend limits
 - [x] Terminal UI: thread view, command palette, light and dark themes
-- [ ] OpenAI-compatible and Ollama providers
+- [x] OpenAI-compatible and Ollama providers
+- [x] OS sandbox for commands (macOS Seatbelt; Linux bubblewrap)
+- [x] Session replay and audit export
+- [x] Benchmark harness with independently verified tasks
+- [ ] Published benchmark results across models
 - [ ] Linux CI and Windows support
 - [ ] Sub-agents for exploring, reviewing and testing
 - [ ] MCP tool integration
-- [ ] Optional OS-level sandboxing
 
 ## Contributing
 

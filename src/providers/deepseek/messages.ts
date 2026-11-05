@@ -33,11 +33,15 @@ export interface WireRequest {
  * assistant message must be passed back in full, or the API returns 400.
  * Without tools it is ignored, so we omit it to save bandwidth.
  */
-export function buildWireRequest(req: ModelRequest): WireRequest {
+export type WireDialect = "deepseek" | "openai";
+
+export function buildWireRequest(req: ModelRequest, dialect: WireDialect = "deepseek"): WireRequest {
   const hasTools = !!req.tools && req.tools.length > 0;
+  const deepseek = dialect === "deepseek";
   const body: WireRequest = {
     model: req.model,
-    messages: req.messages.map((m) => toWireMessage(m, hasTools)),
+    // Generic OpenAI-compatible servers have no reasoning_content field to echo back.
+    messages: req.messages.map((m) => toWireMessage(m, hasTools && deepseek)),
     stream: true,
     stream_options: { include_usage: true },
   };
@@ -48,12 +52,12 @@ export function buildWireRequest(req: ModelRequest): WireRequest {
     }));
   }
   if (req.maxOutputTokens !== undefined) body.max_tokens = req.maxOutputTokens;
-  if (req.thinking) {
+  if (req.thinking && deepseek) {
     body.thinking = { type: req.thinking };
     if (req.thinking === "enabled" && req.reasoningEffort) body.reasoning_effort = req.reasoningEffort;
   }
   // temperature has no effect in thinking mode; only send it when meaningful.
-  if (req.thinking === "disabled" && req.temperature !== undefined) body.temperature = req.temperature;
+  if ((req.thinking === "disabled" || !deepseek) && req.temperature !== undefined) body.temperature = req.temperature;
   return body;
 }
 

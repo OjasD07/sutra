@@ -34,6 +34,8 @@ import {
   type ToolGlyph,
   type UiOptions,
 } from "./components.js";
+import { buildSuggestions } from "./suggestions.js";
+import { sandboxSummary } from "../sandbox/sandbox.js";
 import { threadGlyphs } from "./theme.js";
 
 /** Bridges the runtime's approval callback to the UI. */
@@ -70,7 +72,8 @@ export interface AppProps {
   provider: ModelProvider;
   bridge: ApprovalBridge;
   initialSession: SessionHandle;
-  newSession: () => SessionHandle;
+  /** Opens a fresh session, or resumes the given one. */
+  newSession: (resumeId?: string) => SessionHandle;
   initialPrompt?: string;
   notices: string[];
 }
@@ -379,11 +382,37 @@ export function App(props: AppProps) {
           setLastInput(0);
           notice("info", `New session ${next.record.id.slice(0, 8)}.`, "Session");
         }
+        if (res.action === "resume" && res.sessionId) {
+          const next = props.newSession(res.sessionId);
+          approvedIds.current.clear();
+          setSession(next);
+          setTotals({ ...next.usage.totals });
+          setLastInput(0);
+          notice(
+            "info",
+            `Resumed ${next.record.id.slice(0, 8)}${next.record.title ? ` — ${oneLine(next.record.title, 60)}` : ""} (${next.restored.length} messages)${next.repairedToolCalls ? `; repaired ${next.repairedToolCalls} interrupted tool call(s)` : ""}.`,
+            "Session",
+          );
+          push(...restoredItems(next.restored));
+        }
       } catch (err) {
         notice("error", (err as Error).message);
       }
     },
     [session, config, store, provider, app, push, notice, props],
+  );
+
+  const suggest = useCallback(
+    (value: string) =>
+      buildSuggestions(value, {
+        models: provider.getCapabilities().models,
+        currentModel: session.runtime.model,
+        profile: session.permissions.policy.profile,
+        budgetUsd: config.budget.maxSessionCostUsd,
+        sessions: value.startsWith("/sessions ") || value.startsWith("/resume ") ? store.listSessions(session.workspace.root, 30) : [],
+        currentSessionId: session.record.id,
+      }),
+    [provider, session, config, store],
   );
 
   const submit = useCallback(
@@ -453,6 +482,7 @@ export function App(props: AppProps) {
             workspace={tildify(session.workspace.root)}
             profile={session.permissions.policy.profile.replace(/^./, (c) => c.toUpperCase())}
             instructions={session.instructions}
+            sandbox={sandboxSummary(session.sandbox)}
             {...(session.resumed ? { session: `${session.record.id.slice(0, 8)} (${t("resumed")})` } : {})}
             notices={props.notices}
           />
@@ -502,7 +532,10 @@ export function App(props: AppProps) {
   let footerLeft: React.ReactNode;
   let footerRight: string;
   if (palette) {
-    footerLeft = `${palette.matches} match${palette.matches === 1 ? "" : "es"} · ↑↓ select · Tab complete · Enter run · Esc close`;
+    footerLeft =
+      palette.kind === "commands"
+        ? `${palette.count} match${palette.count === 1 ? "" : "es"} · ↑↓ select · Enter run (▾ opens choices) · Tab complete · Esc close`
+        : `${palette.count} option${palette.count === 1 ? "" : "s"} · ↑↓ select · Enter choose · type to filter · Esc close`;
     footerRight = `${model} · ${profile}`;
   } else if (approval) {
     footerLeft = (
@@ -583,6 +616,7 @@ export function App(props: AppProps) {
         onSubmit={submit}
         onInterrupt={interrupt}
         onPalette={setPalette}
+        suggest={suggest}
         placeholder={busy ? "Type to queue a follow-up…" : t("prompt")}
       />
       <Footer ui={ui} left={footerLeft} right={footerRight} />

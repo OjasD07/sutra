@@ -26,6 +26,7 @@ function formatProcess(r: ProcessResult, display: string, ctx: ToolContext): str
         ? `terminated by signal ${r.signal}`
         : `exit code ${r.exitCode}`;
   const parts = [`$ ${r.command}`, `cwd: ${display}`, `${status}; duration ${(r.durationMs / 1000).toFixed(2)}s`];
+  if (ctx.sandbox) parts.push(`sandbox: ${ctx.sandbox.describe(!!ctx.allowNetwork)} (writes outside the workspace and non-approved network access fail with "Operation not permitted")`);
   if (stdout.trim()) parts.push("--- stdout ---", stdout.trimEnd());
   if (stderr.trim()) parts.push("--- stderr ---", stderr.trimEnd());
   if (!stdout.trim() && !stderr.trim()) parts.push("(no output)");
@@ -38,8 +39,12 @@ async function run(command: string, cwdInput: string | undefined, timeoutMs: num
   const timeout = Math.min(timeoutMs ?? ctx.settings.commandTimeoutMs, MAX_TIMEOUT_MS);
   const logPath = ctx.settings.retainFullLogs ? join(ctx.settings.logDir, `${ctx.toolCallId.replace(/[^A-Za-z0-9_-]/g, "_")}.log`) : undefined;
   const env = { ...(ctx.settings.scrubEnv ? scrubEnv(process.env) : process.env), SUTRA: "1", CI: process.env.CI ?? "1", FORCE_COLOR: "0", NO_COLOR: "1" };
+  if (!ctx.sandbox && ctx.sandboxRequired)
+    return fail("execution_failed", "sandbox.mode is \"required\" but no OS sandbox is available on this machine; the command was not run.");
+  const sandboxNote = ctx.sandbox ? ctx.sandbox.describe(!!ctx.allowNetwork) : "none (approval gate only)";
   const r = await runProcess({
     command,
+    ...(ctx.sandbox ? { argv: ctx.sandbox.wrap(command, cwd.absolute, !!ctx.allowNetwork) } : {}),
     cwd: cwd.absolute,
     env,
     timeoutMs: timeout,
@@ -48,6 +53,7 @@ async function run(command: string, cwdInput: string | undefined, timeoutMs: num
     onData: (_s, chunk) => ctx.onProgress?.(chunk),
   });
   const data = {
+    sandbox: sandboxNote,
     command: r.command,
     cwd: cwd.display,
     startedAt: r.startedAt,
@@ -83,7 +89,10 @@ export const executeCommandTool: Tool<{ command: string; cwd?: string; timeout_m
     timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).optional(),
   }),
   describe: (a, ctx) => ({ tool: "execute_command", category: "execute", command: a.command, paths: [ctx.workspace.resolve(a.cwd ?? ".")], summary: a.command }),
-  preview: async (a, ctx) => ({ summary: `$ ${a.command}`, details: [`cwd: ${ctx.workspace.resolve(a.cwd ?? ".").display}`] }),
+  preview: async (a, ctx) => ({
+    summary: `$ ${a.command}`,
+    details: [`cwd: ${ctx.workspace.resolve(a.cwd ?? ".").display}`, `sandbox: ${ctx.sandbox ? ctx.sandbox.describe(!!ctx.allowNetwork) : "none — runs with your full user permissions"}`],
+  }),
   execute: (a, ctx) => run(a.command, a.cwd, a.timeout_ms, ctx),
 };
 
@@ -140,7 +149,10 @@ export const runTestsTool: Tool<{ filter?: string; timeout_ms?: number }> = {
     const cmd = resolveTestCommand(a, ctx) ?? "(no test command detected)";
     return { tool: "run_tests", category: "execute", command: cmd, paths: [ctx.workspace.resolve(".")], summary: cmd };
   },
-  preview: async (a, ctx) => ({ summary: `$ ${resolveTestCommand(a, ctx) ?? "(none)"}` }),
+  preview: async (a, ctx) => ({
+    summary: `$ ${resolveTestCommand(a, ctx) ?? "(none)"}`,
+    details: [`sandbox: ${ctx.sandbox ? ctx.sandbox.describe(!!ctx.allowNetwork) : "none — runs with your full user permissions"}`],
+  }),
   async execute(a, ctx) {
     const cmd = resolveTestCommand(a, ctx);
     if (!cmd)

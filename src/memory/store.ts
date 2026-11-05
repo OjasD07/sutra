@@ -32,6 +32,17 @@ export interface CompactionRecord {
   createdAt: string;
 }
 
+export interface UsageRecord {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cachedInputTokens: number;
+  latencyMs: number;
+  costUsd: number | null;
+  createdAt: string;
+}
+
 export interface ToolInvocationRecord {
   sessionId: string;
   toolCallId: string;
@@ -263,6 +274,25 @@ export class SessionStore {
     this.db
       .prepare("INSERT INTO compactions (session_id, boundary_seq, summary, tokens_before, tokens_after, created_at) VALUES (?,?,?,?,?,?)")
       .run(sessionId, c.boundarySeq, c.summary, c.tokensBefore, c.tokensAfter, new Date().toISOString());
+  }
+
+  listUsage(sessionId: string): UsageRecord[] {
+    const rows = this.db.prepare("SELECT * FROM usage WHERE session_id = ? ORDER BY id").all(sessionId) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      model: r.model as string,
+      inputTokens: r.input_tokens as number,
+      outputTokens: r.output_tokens as number,
+      reasoningTokens: r.reasoning_tokens as number,
+      cachedInputTokens: r.cached_input_tokens as number,
+      latencyMs: r.latency_ms as number,
+      costUsd: (r.cost_usd as number | null) ?? null,
+      createdAt: r.created_at as string,
+    }));
+  }
+
+  listCompactions(sessionId: string): CompactionRecord[] {
+    const rows = this.db.prepare("SELECT * FROM compactions WHERE session_id = ? ORDER BY id").all(sessionId) as Record<string, unknown>[];
+    return rows.map((r) => ({ boundarySeq: r.boundary_seq as number, summary: r.summary as string, tokensBefore: r.tokens_before as number, tokensAfter: r.tokens_after as number, createdAt: r.created_at as string }));
   }
 
   latestCompaction(sessionId: string): CompactionRecord | null {

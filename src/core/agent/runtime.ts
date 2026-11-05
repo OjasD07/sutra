@@ -16,6 +16,7 @@ import { oneLine, truncateMiddle } from "../../utils/text.js";
 import type { AgentEvent, AgentListener, AgentStatus, ApprovalRequest, TerminalStatus, TurnResult } from "../events/types.js";
 import type { PlanStore } from "../planning/plan.js";
 import { LoopDetector } from "./loop-detector.js";
+import type { SandboxStatus } from "../../sandbox/sandbox.js";
 import type { TestCounts } from "../../tools/shell/test-counts.js";
 
 export interface RuntimeDeps {
@@ -37,6 +38,8 @@ export interface RuntimeDeps {
   toolLogDir: string;
   retryPolicy?: RetryPolicy;
   sleepFn?: typeof sleep;
+  /** OS sandbox for shell commands (absent in delegated tasks and some tests). */
+  sandbox?: SandboxStatus;
   /** Default timeout for tools without their own policy. */
   defaultToolTimeoutMs?: number;
 }
@@ -49,6 +52,8 @@ interface PreparedCall {
   result?: ToolResult;
   outcome?: "error" | "denied" | "cancelled";
   deniedBy?: "user" | "policy";
+  /** Approved as a network command: the sandbox lets this one call out. */
+  allowNetwork?: boolean;
   summary: string;
 }
 
@@ -324,7 +329,8 @@ export class AgentRuntime {
 
   private recordUsage(model: string, usage: TokenUsage | null, latencyMs: number, estimate: number): void {
     const price = this.d.config.pricing[model] ?? this.d.config.pricing[this.model];
-    const cost = usage ? estimateCost(usage, price) : null;
+    // Local inference has no per-token price unless the user configured one.
+    const cost = usage ? (price ? estimateCost(usage, price) : this.d.provider.freeOfCharge ? 0 : null) : null;
     this.d.usage.recordRequest(usage, latencyMs, cost);
     this.d.store?.recordUsage(this.d.sessionId, model, usage, latencyMs, cost);
     if (usage) this.d.context.estimator.calibrate(estimate, usage.inputTokens);
@@ -357,7 +363,7 @@ export class AgentRuntime {
     return { call, tool, args: parsed.data, summary: call.name };
   }
 
-  private toolContext(callId: string, signal: AbortSignal): ToolContext {
+  private toolContext(callId: string, signal: AbortSignal, allowNetwork = false): ToolContext {
     const t = this.d.config.tools;
     return {
       workspace: this.d.workspace,
@@ -375,6 +381,9 @@ export class AgentRuntime {
         logDir: this.d.toolLogDir,
         ...(t.testCommand ? { testCommand: t.testCommand } : {}),
       },
+      sandbox: this.d.sandbox?.runner ?? null,
+      sandboxRequired: this.d.sandbox?.mode === "required",
+      allowNetwork,
       onProgress: (chunk) => this.emit({ type: "tool_progress", toolCallId: callId, chunk: this.d.redactor.redact(chunk) }),
     };
   }
@@ -399,6 +408,8 @@ export class AgentRuntime {
     }
     p.summary = req.summary;
     const decision = this.d.permissions.evaluate(req);
+    p.allowNetwork = this.d.config.sandbox.network || !!decision.command?.network;
+    const previewCtx = this.toolContext(p.call.id, signal, p.allowNetwork);
     if (decision.verdict === "deny") {
       p.outcome = "denied";
       p.deniedBy = "policy";
@@ -410,7 +421,7 @@ export class AgentRuntime {
     let preview;
     if (tool.preview) {
       try {
-        preview = await tool.preview(p.args, ctx);
+        preview = await tool.preview(p.args, previewCtx);
       } catch (err) {
         // A failing preview (e.g. edit target not found) is the call's result;
         // there's nothing meaningful to approve.
@@ -448,7 +459,7 @@ export class AgentRuntime {
           resolve(fail("timeout", `${tool.name} exceeded its ${timeoutMs} ms timeout`));
         }, timeoutMs);
       });
-      const result = await Promise.race([tool.execute(p.args, this.toolContext(p.call.id, callAc.signal)), timeout]);
+      const result = await Promise.race([tool.execute(p.args, this.toolContext(p.call.id, callAc.signal, p.allowNetwork)), timeout]);
       p.result = result;
       if (!result.ok) p.outcome = result.error?.code === "cancelled" ? "cancelled" : "error";
     } catch (err) {

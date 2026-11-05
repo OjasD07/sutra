@@ -61,6 +61,46 @@ export const ConfigSchema = z.object({
           models: z.record(z.string(), ModelInfoOverride).default({}),
         })
         .prefault({}),
+      /** Any OpenAI-compatible endpoint: OpenAI, vLLM, LM Studio, llama.cpp, OpenRouter, ... */
+      openai: z
+        .object({
+          apiKey: z.string().optional(),
+          baseUrl: z.string().url().default("https://api.openai.com/v1"),
+          timeoutMs: z.number().int().positive().optional(),
+          models: z.record(z.string(), ModelInfoOverride).default({}),
+          /** Treat requests as free (self-hosted inference). */
+          freeOfCharge: z.boolean().default(false),
+          /** Context window assumed for models with no metadata. */
+          contextWindow: z.number().int().positive().default(128_000),
+        })
+        .prefault({}),
+      /** Local Ollama server (OpenAI-compatible endpoint). */
+      ollama: z
+        .object({
+          baseUrl: z.string().url().default("http://localhost:11434/v1"),
+          timeoutMs: z.number().int().positive().optional(),
+          models: z.record(z.string(), ModelInfoOverride).default({}),
+          /**
+           * Must match the server's context length (OLLAMA_CONTEXT_LENGTH or the
+           * model's num_ctx). Ollama silently truncates longer prompts.
+           */
+          contextWindow: z.number().int().positive().default(32_768),
+        })
+        .prefault({}),
+    })
+    .prefault({}),
+  sandbox: z
+    .object({
+      /**
+       * OS-level isolation for shell commands and tests.
+       * auto: use it when the platform supports it; required: refuse to run
+       * commands without it; off: approval gate only.
+       */
+      mode: z.enum(["auto", "required", "off"]).default("auto"),
+      /** Extra directories commands may write to (besides the workspace and temp dirs). */
+      allowWrite: z.array(z.string()).default([]),
+      /** Allow network for every command, not only for approved network commands. */
+      network: z.boolean().default(false),
     })
     .prefault({}),
   pricing: z.record(z.string(), ModelPriceSchema).default({}),

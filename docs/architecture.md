@@ -13,7 +13,11 @@ src/
     session.ts  wires all layers into a session (new or resumed)
     delegate.ts delegated-task interface (subagent foundation)
   providers/    ModelProvider interface, errors, retry wrapper, registry
-    deepseek/   wire format, SSE parser, streaming adapter, model metadata
+    openai-compatible/  generic Chat Completions adapter (fetch + SSE)
+    deepseek/   DeepSeek dialect, wire format, SSE parser, model metadata
+  sandbox/      OS sandbox: Seatbelt profile (macOS), bubblewrap args (Linux)
+  audit/        session audit model, replay timeline, Markdown/JSON export
+  bench/        benchmark runner and reports
   tools/        Tool interface, registry, filesystem / shell / git / plan tools
   context/      ContextManager (history, budget, compaction), token estimator,
                 instruction loading, system prompt
@@ -72,7 +76,7 @@ interface ModelProvider {
 
 `ModelEvent` is one of `text_delta`, `reasoning_delta` (a character count only, so reasoning text never reaches UIs), `tool_call_start`, `tool_call_delta`, or a single final `message_complete` carrying the assembled `AssistantMessage`, the finish reason and usage. Providers throw `ProviderError` with a `kind` (`rate_limited`, `authentication`, …), from which `retryable` is derived.
 
-New providers register a factory with `registerProvider(id, (config) => provider)`.
+New providers register a factory with `registerProvider(id, (config) => provider)`. Three are registered: `deepseek`, `ollama` and `openai-compatible`. All three use `OpenAICompatibleProvider`, which speaks Chat Completions over fetch + SSE. A *dialect* switch adds DeepSeek's `thinking` / `reasoning_effort` fields and echoes `reasoning_content`; the plain `openai` dialect does neither. Providers can declare `freeOfCharge`, so local inference is costed at $0 instead of "unknown".
 
 ### DeepSeek specifics
 
@@ -97,6 +101,15 @@ The system prompt stays stable within a session. The plan reaches the model thro
 ## Persistence
 
 `SessionStore` (`~/.sutra/sutra.db`, mode 600) has these tables: `sessions`, `messages` (full JSON, including reasoning, which is needed for a protocol-correct resume), `tool_invocations`, `checkpoints` (status plus file-state snapshots), `plans`, `compactions` and `usage`. Migrations are versioned with `PRAGMA user_version`. When you resume, Sutra loads the messages after the latest compaction boundary along with its summary, then repairs any dangling tool calls with explicit "interrupted" results. It also restores the plan, the file-state tracker and the usage totals.
+
+## Sandbox
+
+`createSandbox(mode, policy)` probes for a working backend once (by running a trivial sandboxed command) and returns a `SandboxRunner` that wraps a shell command into an argv: `sandbox-exec -p <profile> /bin/sh -c …` on macOS, `bwrap … /bin/sh -c …` on Linux. The runtime passes the runner to shell tools through `ToolContext`, with a per-call `allowNetwork` flag. That flag is set when the permission engine's command assessment says the command needs the network, which means the user approved it as a network command. See [security.md](security.md).
+
+## Audit, replay and benchmarks
+
+- `buildAudit(store, sessionId)` reconstructs a session from SQLite: turns, steps (assistant text paired with the usage row of the request that produced it), tool calls with arguments, results, timings and sandbox, files changed, commands run and compactions. It never includes reasoning content. `renderReplay`, `renderMarkdown` and `renderJson` present it.
+- `runBench({ tasks, … })` copies each task's `repo/` into a temp directory, runs one agent turn with the Flow profile, a per-task spend limit and approvals denied, then restores the task's `protected` paths and runs its `verify` command, sandboxed. Pass or fail comes only from that command's exit code. Each run is a normal saved session. See [benchmarks.md](benchmarks.md).
 
 ## Extension points
 

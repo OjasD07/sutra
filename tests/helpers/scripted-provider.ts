@@ -29,7 +29,8 @@ export class ScriptedProvider implements ModelProvider {
   constructor(private steps: (ScriptStep | StepFn)[], private info: ModelInfo = DEEPSEEK_MODELS["deepseek-flash"]!) {}
 
   getCapabilities(): ModelCapabilities {
-    return { streaming: true, toolCalls: true, parallelToolCalls: true, thinking: true, promptCaching: true, models: [this.info] };
+    const models = this.info.id in DEEPSEEK_MODELS ? Object.values(DEEPSEEK_MODELS) : [this.info];
+    return { streaming: true, toolCalls: true, parallelToolCalls: true, thinking: true, promptCaching: true, models };
   }
   getModelInfo(): ModelInfo {
     return this.info;
