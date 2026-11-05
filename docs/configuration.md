@@ -108,6 +108,28 @@ For Ollama and OpenAI-compatible servers there is no built-in default model. Sut
 
 The OpenAI-compatible adapter sends standard Chat Completions (streaming, `tools`, `stream_options.include_usage`). It reads streamed reasoning from `reasoning_content` or `reasoning` (Ollama, OpenRouter) for progress display, but doesn't send it back, because generic servers don't expect it.
 
+## Repository index
+
+```json
+{
+  "index": {
+    "enabled": true,
+    "mapTokens": 2000,
+    "maxFiles": 5000,
+    "embeddings": { "baseUrl": "http://localhost:11434/v1", "model": "nomic-embed-text" }
+  }
+}
+```
+
+| Key | |
+| --- | --- |
+| `enabled` | Build the index at session start and offer `repo_map`, `find_symbol` and `code_search`. `--no-index` turns it off for one run |
+| `mapTokens` | Size of the repository map placed in the system prompt; `0` keeps the tools but leaves the map out of the prompt |
+| `maxFiles` | Stop indexing after this many source files (the map then says so) |
+| `embeddings` | Optional. Any OpenAI-compatible `/embeddings` endpoint. `code_search` then fuses BM25 with embedding similarity (reciprocal-rank fusion). Use `apiKeyEnv` to name an environment variable holding the key; keys are never stored in config. `maxChunks` caps how much code is embedded (default 4,000 chunks) |
+
+With embeddings configured, code chunks are sent to that endpoint. Use a local server (for example `ollama pull nomic-embed-text`) to keep code on your machine. Vectors are cached in `~/.sutra/index/` by content hash, so unchanged code is embedded only once. Embedding requests are not included in `/cost`. If the endpoint fails, `code_search` says so and falls back to BM25.
+
 ## Sandbox
 
 ```json

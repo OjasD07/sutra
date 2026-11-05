@@ -126,6 +126,25 @@ export const ConfigSchema = z.object({
       keepRecentTurns: z.number().int().min(1).default(2),
     })
     .prefault({}),
+  index: z
+    .object({
+      /** Build a repository index (symbols, reference graph, ranked search) at session start. */
+      enabled: z.boolean().default(true),
+      /** Token budget for the repository map placed in the system prompt (0 = no map in the prompt). */
+      mapTokens: z.number().int().min(0).max(16_000).default(2000),
+      maxFiles: z.number().int().positive().default(5000),
+      /** Optional embeddings for code_search (any OpenAI-compatible /embeddings endpoint). */
+      embeddings: z
+        .object({
+          baseUrl: z.string().url(),
+          model: z.string().min(1),
+          /** Name of an environment variable holding the key (keys are never stored in config). */
+          apiKeyEnv: z.string().optional(),
+          maxChunks: z.number().int().positive().optional(),
+        })
+        .optional(),
+    })
+    .prefault({}),
   tools: z
     .object({
       commandTimeoutMs: z.number().int().positive().default(120_000),

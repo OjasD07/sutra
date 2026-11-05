@@ -16,6 +16,8 @@ src/
     openai-compatible/  generic Chat Completions adapter (fetch + SSE)
     deepseek/   DeepSeek dialect, wire format, SSE parser, model metadata
   sandbox/      OS sandbox: Seatbelt profile (macOS), bubblewrap args (Linux)
+  index/        repository index: symbol extraction, reference graph + PageRank map,
+                BM25 chunk search, optional embeddings
   audit/        session audit model, replay timeline, Markdown/JSON export
   bench/        benchmark runner and reports
   tools/        Tool interface, registry, filesystem / shell / git / plan tools
@@ -105,6 +107,16 @@ The system prompt stays stable within a session. The plan reaches the model thro
 ## Sandbox
 
 `createSandbox(mode, policy)` probes for a working backend once (by running a trivial sandboxed command) and returns a `SandboxRunner` that wraps a shell command into an argv: `sandbox-exec -p <profile> /bin/sh -c …` on macOS, `bwrap … /bin/sh -c …` on Linux. The runtime passes the runner to shell tools through `ToolContext`, with a per-call `allowNetwork` flag. That flag is set when the permission engine's command assessment says the command needs the network, which means the user approved it as a network command. See [security.md](security.md).
+
+## Repository index
+
+`RepoIndexService` (one per session) wraps a `RepoIndex`:
+
+1. **Scan.** A synchronous walk honouring `.gitignore` and the default ignore list indexes source files by extension. Unchanged files (same size and mtime) are reused on refresh. Tools refresh at most every 1.5 s, and immediately after a successful edit or command.
+2. **Symbols.** Per-language regular expressions (`src/index/symbols.ts`) extract definitions with kind, line, signature, export status and parent class. This is deliberately dependency-free; tree-sitter would be more precise, at the cost of native or WASM grammars.
+3. **Graph and rank.** File A links to file B when A uses a *linkable* name that B defines. Linkable means exported (or a distinctive method name), at least 4 characters, and not generic (CamelCase, snake_case or 8+ characters), so words like `type` or `line` don't wire unrelated files together. Personalised PageRank (damping 0.85, 40 iterations) ranks files; focus files get the personalisation mass. Tests, examples, scripts and benchmarks are down-weighted.
+4. **Map.** Files in rank order, each with its most-referenced definitions (up to 12) and line numbers, added until the token budget is spent, then a "… N more files" line. The map goes into the system prompt once per session.
+5. **Search.** Each file is split into chunks at definition boundaries (at most 80 lines). Terms are identifiers split into lower-case words, lightly stemmed, with stop words removed. The symbol name and path terms are weighted up. BM25 (k1 = 1.2, b = 0.75) is scaled by query coverage. With embeddings configured, the top 50 BM25 hits and the top 50 by cosine similarity are fused with reciprocal-rank fusion (k = 60).
 
 ## Audit, replay and benchmarks
 

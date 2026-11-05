@@ -17,6 +17,7 @@ import type { AgentEvent, AgentListener, AgentStatus, ApprovalRequest, TerminalS
 import type { PlanStore } from "../planning/plan.js";
 import { LoopDetector } from "./loop-detector.js";
 import type { SandboxStatus } from "../../sandbox/sandbox.js";
+import type { RepoIndexService } from "../../index/service.js";
 import type { TestCounts } from "../../tools/shell/test-counts.js";
 
 export interface RuntimeDeps {
@@ -38,6 +39,8 @@ export interface RuntimeDeps {
   toolLogDir: string;
   retryPolicy?: RetryPolicy;
   sleepFn?: typeof sleep;
+  /** Repository index shared by the code-navigation tools. */
+  repoIndex?: RepoIndexService | null;
   /** OS sandbox for shell commands (absent in delegated tasks and some tests). */
   sandbox?: SandboxStatus;
   /** Default timeout for tools without their own policy. */
@@ -382,6 +385,7 @@ export class AgentRuntime {
         ...(t.testCommand ? { testCommand: t.testCommand } : {}),
       },
       sandbox: this.d.sandbox?.runner ?? null,
+      repoIndex: this.d.repoIndex ?? null,
       sandboxRequired: this.d.sandbox?.mode === "required",
       allowNetwork,
       onProgress: (chunk) => this.emit({ type: "tool_progress", toolCallId: callId, chunk: this.d.redactor.redact(chunk) }),
@@ -486,7 +490,10 @@ export class AgentRuntime {
   private afterTool(p: PreparedCall, st: TurnState): void {
     const r = p.result!;
     const tool = p.tool!;
-    if (r.ok && !tool.readOnly && tool.category !== "internal") this.loop.advanceEpoch();
+    if (r.ok && !tool.readOnly && tool.category !== "internal") {
+      this.loop.advanceEpoch();
+      this.d.repoIndex?.markDirty();
+    }
     const files = r.ok ? (r.data?.files as string[] | undefined) : undefined;
     for (const f of files ?? []) {
       st.filesChanged.add(f);

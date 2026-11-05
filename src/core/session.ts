@@ -17,6 +17,9 @@ import { createDefaultRegistry, type ToolRegistry } from "../tools/registry.js";
 import { detectTestCommand } from "../tools/shell/shell-tools.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createSandbox, type SandboxStatus } from "../sandbox/sandbox.js";
+import { RepoIndexService } from "../index/service.js";
+
+const INDEX_TOOLS = new Set(["repo_map", "find_symbol", "code_search"]);
 import type { ApprovalRequest } from "./events/types.js";
 import { PlanStore } from "./planning/plan.js";
 
@@ -35,6 +38,7 @@ export interface SessionHandle {
   restored: Message[];
   repairedToolCalls: number;
   sandbox: SandboxStatus;
+  repoIndex: RepoIndexService | null;
 }
 
 export interface OpenSessionOptions {
@@ -88,6 +92,7 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
 
   let tools = o.tools ?? createDefaultRegistry();
   if (config.permissions.profile === "inspect") tools = tools.subset((t) => t.category === "read" || t.category === "internal");
+  if (!config.index.enabled) tools = tools.subset((t) => !INDEX_TOOLS.has(t.name));
 
   const plan = new PlanStore();
   const usage = new UsageTracker(resumed ? store.usageTotals(record.id) : undefined);
@@ -120,6 +125,22 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
       network: config.sandbox.network,
     });
 
+  // Index the repository once at session start; tools refresh it incrementally.
+  let repoIndex: RepoIndexService | null = null;
+  let repoMap: string | null = null;
+  if (config.index.enabled) {
+    const e = config.index.embeddings;
+    repoIndex = new RepoIndexService(workspace.root, {
+      maxFiles: config.index.maxFiles,
+      cacheDir: paths.indexCache(),
+      ...(e
+        ? { embeddings: { baseUrl: e.baseUrl, model: e.model, ...(e.apiKeyEnv && process.env[e.apiKeyEnv] ? { apiKey: process.env[e.apiKeyEnv]! } : {}), ...(e.maxChunks ? { maxChunks: e.maxChunks } : {}) } }
+        : {}),
+    });
+    const stats = repoIndex.refresh(true);
+    if (config.index.mapTokens > 0 && stats.files > 0) repoMap = repoIndex.index.map({ maxTokens: config.index.mapTokens });
+  }
+
   const redactor = new SecretRedactor();
   redactor.add(config.providers.deepseek.apiKey);
   const instructions = loadInstructions(workspace.root);
@@ -141,6 +162,7 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
     config,
     approve: o.approve,
     sandbox,
+    repoIndex,
     toolLogDir: paths.toolLogs(record.id),
     // Kept stable within a session so the provider's prefix cache stays warm;
     // the plan reaches the model through update_plan results instead.
@@ -157,8 +179,9 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
         plan: null,
         summary: context.getSummary(),
         toolNames: tools.list().map((t) => t.name),
+        repoMap,
       }),
   });
 
-  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired, sandbox };
+  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired, sandbox, repoIndex };
 }

@@ -108,6 +108,7 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
         `Thinking     ${info.supportsThinking ? `${config.thinking} (effort ${config.reasoningEffort})` : "not supported"}`,
         `Permission   ${session.permissions.policy.profile}`,
         `Sandbox      ${sandboxSummary(session.sandbox)}`,
+        `Index        ${session.repoIndex ? `${session.repoIndex.index.stats.files} files · ${session.repoIndex.index.stats.symbols} symbols · ${session.repoIndex.embeddingModel ? `BM25 + embeddings (${session.repoIndex.embeddingModel})` : "BM25"}` : "disabled"}`,
         `Context      ~${n(est)} tokens per request; compacts at ${(session.context.budget.threshold * 100).toFixed(0)}%`,
         `Instructions ${session.instructions.length ? session.instructions.map((i) => i.path).join(", ") : "none"}`,
         `Spend        ${formatCost(session.usage.totals)}`,

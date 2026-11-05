@@ -15,4 +15,5 @@ export const paths = {
   toolLogs: (sessionId: string) => join(sutraHome(), "logs", "tools", sessionId),
   exports: () => join(sutraHome(), "exports"),
   bench: () => join(sutraHome(), "bench"),
+  indexCache: () => join(sutraHome(), "index"),
 };

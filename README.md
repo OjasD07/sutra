@@ -291,6 +291,26 @@ The bundled suite has four tasks (a unit-conversion bug, off-by-one pagination, 
 > [!NOTE]
 > No benchmark results are published yet. The numbers in this README come from test runs against a mock server, not from real models. Run `sutra bench` against your own provider to get real ones, and please share them.
 
+## Codebase understanding
+
+When a session starts, Sutra indexes the repository's source code, in about 100 ms for a hundred files and a couple of seconds for a few thousand. The index feeds three things:
+
+- **A repository map in the prompt.** Every definition is extracted (functions, classes, methods, types). Files are linked by which names they use from each other and ranked with PageRank. The model starts with an outline of the most important files and signatures, with line numbers, within a 2,000-token budget. It's built once per session, so the provider's prompt cache keeps working.
+- **`find_symbol`** gives a name's definitions (`file:line` and signature) and every place it's used.
+- **`code_search`** handles questions in words ("where are expired sessions refreshed"). It ranks functions and classes with BM25 over identifiers split into words (`refreshAuthToken` → refresh, auth, token). Optionally it combines this with embeddings from any OpenAI-compatible `/embeddings` endpoint, such as a local Ollama model.
+
+`repo_map` re-centres the map on the files you're working on. Edits are picked up automatically.
+
+| | |
+| --- | --- |
+| **Languages** | TypeScript, JavaScript, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, C, C++, Swift, Scala |
+| **How** | Pattern-based extraction: no native code or grammar downloads. Compared with a full parser it misses some unusual syntax (multi-line signatures, macros) |
+| **Limits** | Up to 5,000 files (configurable). Generated and ignored directories (`node_modules`, `dist`, `build`, `.gitignore` entries) are skipped |
+| **Off switch** | `--no-index`, or `"index": { "enabled": false }` |
+
+> [!NOTE]
+> **What the index does and doesn't do yet.** In a live A/B test on Sutra's own repository (about 100 files, 3 navigation questions, DeepSeek), answers were equally correct with and without the index. The index saved tool calls on one question, made no difference on another, and the model read more files on the third. The map adds about 2,000 input tokens per request, mostly cached. On a codebase this small, grep already finds things in one step; the index is meant for large repositories, where that stops working. It hasn't been measured there yet.
+
 ## Sessions and memory
 
 Everything is saved locally in SQLite (`~/.sutra/sutra.db`): messages, tool calls and their results, plans, token usage and checkpoints.
@@ -317,7 +337,7 @@ Put an `AGENTS.md` in your repository, or `.sutra/AGENTS.md`, to tell Sutra how 
 - **Nothing gets lost.** Every tool call gets exactly one recorded result, including failures, denials and cancellations. Repeated identical calls are detected and stopped.
 - **Careful edits.** Writes are atomic and checked after writing. Sutra won't overwrite a file it hasn't read, or one that changed since it last looked.
 
-**Built-in tools:** `read_file`, `list_directory`, `glob_files`, `search_files`, `grep_search`, `write_file`, `edit_file`, `apply_patch`, `execute_command`, `run_tests`, `git_status`, `git_diff`, `update_plan`.
+**Built-in tools:** `read_file`, `list_directory`, `glob_files`, `search_files`, `grep_search`, `repo_map`, `find_symbol`, `code_search`, `write_file`, `edit_file`, `apply_patch`, `execute_command`, `run_tests`, `git_status`, `git_diff`, `update_plan`.
 
 More detail is in [docs/architecture.md](docs/architecture.md).
 
@@ -361,6 +381,8 @@ What to know before relying on it:
 - [x] OS sandbox for commands (macOS Seatbelt; Linux bubblewrap)
 - [x] Session replay and audit export
 - [x] Benchmark harness with independently verified tasks
+- [x] Repository map, symbol lookup and ranked code search (optional embeddings)
+- [ ] Measured gains from the index on large repositories
 - [ ] Published benchmark results across models
 - [ ] Linux CI and Windows support
 - [ ] Sub-agents for exploring, reviewing and testing

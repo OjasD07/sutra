@@ -14,6 +14,8 @@ export interface CliArgs {
   model?: string;
   profile?: PermissionProfile;
   sandbox?: "auto" | "required" | "off";
+  /** --no-index: skip the repository index (map, find_symbol, code_search). */
+  index: boolean;
   debug: boolean;
   color: boolean;
   print: boolean;
@@ -51,6 +53,7 @@ Options
   --profile <inspect|confirm|flow>
                                  Permission profile (default: confirm)
   --sandbox <auto|required|off>  OS sandbox for commands (default: auto)
+  --no-index                     Skip the repository index (map, find_symbol, code_search)
   --no-thinking                  Disable the model's thinking mode
   -p, --print                    Non-interactive: print the answer to stdout, activity to stderr
   --json                         With --print: emit runtime events as JSON lines
@@ -89,6 +92,7 @@ export function parseCli(argv: string[]): CliArgs {
       readonly: { type: "boolean", default: false },
       profile: { type: "string" },
       sandbox: { type: "string" },
+      "no-index": { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       "no-color": { type: "boolean", default: false },
       print: { type: "boolean", short: "p", default: false },
@@ -141,6 +145,7 @@ export function parseCli(argv: string[]): CliArgs {
     ...(values.model ? { model: values.model } : {}),
     ...(values.readonly ? { profile: "inspect" as const } : values.profile ? { profile: values.profile as PermissionProfile } : {}),
     ...(values.sandbox ? { sandbox: values.sandbox as CliArgs["sandbox"] } : {}),
+    index: !values["no-index"],
     debug: values.debug,
     color: !values["no-color"],
     print: values.print,

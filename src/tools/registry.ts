@@ -5,6 +5,7 @@ import { globFilesTool, grepSearchTool, listDirectoryTool, readFileTool, searchF
 import { applyPatchTool, editFileTool, writeFileTool } from "./filesystem/write-tools.js";
 import { gitDiffTool, gitStatusTool } from "./git/git-tools.js";
 import { executeCommandTool, runTestsTool } from "./shell/shell-tools.js";
+import { codeSearchTool, findSymbolTool, repoMapTool } from "./index/index-tools.js";
 import type { Tool } from "./types.js";
 
 const NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -63,5 +64,8 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(runTestsTool)
     .register(gitStatusTool)
     .register(gitDiffTool)
+    .register(repoMapTool)
+    .register(findSymbolTool)
+    .register(codeSearchTool)
     .register(updatePlanTool);
 }

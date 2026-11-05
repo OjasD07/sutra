@@ -5,6 +5,7 @@ import type { Workspace } from "../permissions/paths.js";
 import type { PlanStore } from "../core/planning/plan.js";
 import type { FileStateTracker } from "./file-state.js";
 import type { SandboxRunner } from "../sandbox/sandbox.js";
+import type { RepoIndexService } from "../index/service.js";
 
 export interface ToolContext {
   workspace: Workspace;
@@ -30,6 +31,8 @@ export interface ToolContext {
   sandboxRequired?: boolean;
   /** This call was approved as a network command, so the sandbox lets it out. */
   allowNetwork?: boolean;
+  /** Repository index for repo_map / find_symbol / code_search (absent when disabled). */
+  repoIndex?: RepoIndexService | null;
 }
 
 export type ToolErrorCode =

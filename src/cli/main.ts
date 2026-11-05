@@ -62,6 +62,7 @@ export async function main(argv: string[]): Promise<number> {
   if (args.command === "init") return runInit({ color, theme });
 
   if (args.sandbox) config.sandbox.mode = args.sandbox;
+  if (!args.index) config.index.enabled = false;
 
   // Commands that only read the local session store need no provider.
   if (args.command === "replay" || args.command === "export") {
