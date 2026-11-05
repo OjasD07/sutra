@@ -73,6 +73,21 @@ export class UsageTracker {
     else t.costUsd += cost;
   }
 
+  /** Fold in another run's totals (sub-agents working in isolated snapshots). */
+  merge(o: UsageTotals): void {
+    const t = this.totals;
+    t.inputTokens += o.inputTokens;
+    t.outputTokens += o.outputTokens;
+    t.reasoningTokens += o.reasoningTokens;
+    t.cachedInputTokens += o.cachedInputTokens;
+    t.requests += o.requests;
+    t.toolCalls += o.toolCalls;
+    t.modelLatencyMs += o.modelLatencyMs;
+    t.toolLatencyMs += o.toolLatencyMs;
+    t.costUsd += o.costUsd;
+    t.costIncomplete ||= o.costIncomplete;
+  }
+
   recordTool(latencyMs: number): void {
     this.totals.toolCalls += 1;
     this.totals.toolLatencyMs += latencyMs;

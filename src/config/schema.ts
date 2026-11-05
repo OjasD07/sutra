@@ -126,6 +126,16 @@ export const ConfigSchema = z.object({
       keepRecentTurns: z.number().int().min(1).default(2),
     })
     .prefault({}),
+  quality: z
+    .object({
+      /**
+       * fast: evidence labels only, no extra model calls. balanced: evidence
+       * packet, task contract, finish gate, alignment review, one
+       * counterexample round. deep: adds a second round and competing patches.
+       */
+      mode: z.enum(["fast", "balanced", "deep"]).default("balanced"),
+    })
+    .prefault({}),
   index: z
     .object({
       /** Build a repository index (symbols, reference graph, ranked search) at session start. */

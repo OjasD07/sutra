@@ -127,6 +127,18 @@ export function renderMarkdown(a: SessionAudit): string {
     });
     for (const note of turn.notes) md.push(`_Harness note: ${note}_`, "");
   }
+  if (a.verifications.length) {
+    md.push("## Finish-gate evidence", "");
+    for (const { turn, verification: v } of a.verifications) {
+      const checks = new Map(v.checks.map((c) => [c.id, c]));
+      md.push(`### Turn ${turn} — ${v.overall} (${v.mode} mode${v.treeHash ? `, version \`${v.treeHash}\`` : ""})`, "", "| Criterion | Result | Evidence |", "| --- | --- | --- |");
+      for (const c of v.criteria) md.push(`| ${c.text.replace(/\|/g, "\\|")} | ${c.status} | ${(c.evidence.map((id) => checks.get(id)?.summary).filter(Boolean).join("; ") || c.note || "—").replace(/\|/g, "\\|")} |`);
+      if (v.review) md.push("", `Independent review: **${v.review.verdict}** — ${v.review.inferred}${v.review.gaps.length ? ` (gaps: ${v.review.gaps.join("; ")})` : ""}`);
+      if (v.counterexamples.length) md.push("", `Provisional counterexamples: ${v.counterexamples.map((c) => `${c.name} (${c.failing ? "still failing" : "now passing"})`).join(", ")}`);
+      if (v.candidates.length) md.push("", `Competing patches: ${v.candidates.map((c) => `${c.label}${c.selected ? " ✓" : ""} — ${c.reason}`).join("; ")}`);
+      md.push("");
+    }
+  }
   if (a.compactions.length) {
     md.push("## Context compactions", "");
     for (const c of a.compactions) md.push(`- ${c.createdAt}: ~${n(c.tokensBefore)} → ~${n(c.tokensAfter)} tokens (messages up to #${c.boundarySeq} summarised)`);

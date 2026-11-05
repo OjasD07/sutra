@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "../providers/types.js";
 import { updatePlanTool } from "./agent/plan-tool.js";
+import { hypothesesTool } from "./agent/hypotheses-tool.js";
 import { globFilesTool, grepSearchTool, listDirectoryTool, readFileTool, searchFilesTool } from "./filesystem/read-tools.js";
 import { applyPatchTool, editFileTool, writeFileTool } from "./filesystem/write-tools.js";
 import { gitDiffTool, gitStatusTool } from "./git/git-tools.js";
@@ -67,5 +68,6 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(repoMapTool)
     .register(findSymbolTool)
     .register(codeSearchTool)
-    .register(updatePlanTool);
+    .register(updatePlanTool)
+    .register(hypothesesTool);
 }

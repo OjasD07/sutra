@@ -18,6 +18,8 @@ import { detectTestCommand } from "../tools/shell/shell-tools.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { createSandbox, type SandboxStatus } from "../sandbox/sandbox.js";
 import { RepoIndexService } from "../index/service.js";
+import { QualityEngine } from "../quality/engine.js";
+import { HypothesisLedger } from "../quality/ledger.js";
 
 const INDEX_TOOLS = new Set(["repo_map", "find_symbol", "code_search"]);
 import type { ApprovalRequest } from "./events/types.js";
@@ -39,6 +41,8 @@ export interface SessionHandle {
   repairedToolCalls: number;
   sandbox: SandboxStatus;
   repoIndex: RepoIndexService | null;
+  quality: QualityEngine;
+  ledger: HypothesisLedger;
 }
 
 export interface OpenSessionOptions {
@@ -147,6 +151,24 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
   const isGitRepo = existsSync(join(workspace.root, ".git"));
   const date = new Date().toISOString().slice(0, 10);
 
+  const ledger = new HypothesisLedger();
+  // The engine talks to the runtime through closures (the runtime is created just below).
+  const quality = new QualityEngine({
+    config,
+    provider: o.provider,
+    model: () => runtime.model,
+    workspaceRoot: workspace.root,
+    repoIndex,
+    permissions,
+    sandbox,
+    testCommand,
+    store,
+    ledger,
+    recordUsage: (model, usage, latencyMs) => runtime.recordAuxiliaryUsage(model, usage, latencyMs),
+    recordSubAgent: (t) => runtime.recordSubAgentUsage(t),
+    emit: (e) => runtime.emitQuality(e),
+  });
+
   const runtime = new AgentRuntime({
     provider: o.provider,
     tools,
@@ -163,6 +185,8 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
     approve: o.approve,
     sandbox,
     repoIndex,
+    quality,
+    ledger,
     toolLogDir: paths.toolLogs(record.id),
     // Kept stable within a session so the provider's prefix cache stays warm;
     // the plan reaches the model through update_plan results instead.
@@ -183,5 +207,5 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
       }),
   });
 
-  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired, sandbox, repoIndex };
+  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired, sandbox, repoIndex, quality, ledger };
 }

@@ -291,6 +291,38 @@ export class RepoIndex {
     return out.sort((a, b) => kindOrder(a.symbol.kind) - kindOrder(b.symbol.kind) || a.file.path.localeCompare(b.file.path));
   }
 
+  /** Dependency edges of one file: files whose definitions it uses, and files that use its definitions. */
+  neighbors(path: string, limit = 6): { uses: string[]; usedBy: string[] } {
+    const file = this.byPath.get(path);
+    if (!file) return { uses: [], usedBy: [] };
+    const defs = this.definitionsByName();
+    const uses = new Map<string, number>();
+    for (const [name, count] of file.idents) {
+      const d = defs.get(name);
+      if (!d || d.size > 8 || d.has(path)) continue;
+      for (const t of d) uses.set(t, (uses.get(t) ?? 0) + count);
+    }
+    const own = new Set(file.symbols.filter(isLinkable).map((s) => s.name));
+    const usedBy = new Map<string, number>();
+    for (const other of this.byPath.values()) {
+      if (other === file) continue;
+      let n = 0;
+      for (const name of own) n += other.idents.get(name) ?? 0;
+      if (n) usedBy.set(other.path, n);
+    }
+    const top = (m: Map<string, number>) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([p]) => p);
+    return { uses: top(uses), usedBy: top(usedBy) };
+  }
+
+  /** The definition enclosing a 1-based line, if any. */
+  enclosingSymbol(path: string, line: number): CodeSymbol | undefined {
+    const f = this.byPath.get(path);
+    if (!f) return undefined;
+    let best: CodeSymbol | undefined;
+    for (const s of f.symbols) if (s.line <= line && (!best || s.line >= best.line)) best = s;
+    return best;
+  }
+
   /** Files that mention `name` (from the identifier index, excluding pure definitions). */
   filesReferencing(name: string): string[] {
     const out: string[] = [];

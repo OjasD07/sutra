@@ -19,6 +19,7 @@
   <a href="#using-sutra">Using Sutra</a> ·
   <a href="#staying-in-control">Permissions & sandbox</a> ·
   <a href="#cost-and-budgets">Cost</a> ·
+  <a href="#verified-not-just-finished">Verification</a> ·
   <a href="#audit-and-replay">Audit</a> ·
   <a href="#benchmarks">Benchmarks</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -224,6 +225,38 @@ Approvals decide *whether* a command runs. The sandbox limits *what it can do* o
 > [!IMPORTANT]
 > The sandbox is a strong second layer, not a guarantee. It runs commands under your user account with rules for writes, credential reads and the network; it is not a separate machine or container. Read commands before approving them. [docs/security.md](docs/security.md) explains exactly what is enforced, how it was tested, and its limits (the Linux backend is implemented but hasn't been tested on Linux yet).
 
+## Verified, not just finished
+
+Most agents treat "the model stopped calling tools" as "done". Sutra doesn't. When the model stops, a **finish gate** checks each acceptance criterion of your request against evidence recorded *after the last edit*, and labels anything without such evidence **unverified** instead of letting it pass as done:
+
+```
+Evidence  ● verified  ·  balanced mode · version 3f9a2c1 · sent back 1× · checks cost $0.0021
+          ✓ The session tests pass                npm test → exit 0 (4/4 passed)
+          ✓ No test files are modified             harness record: changed src/session.js; no test files changed
+          ✓ Expired once the expiry time is reached  provisional test "expiry boundary" passes (provisional)
+Review    aligned  "Makes isExpired compare expiresAt in seconds against now in milliseconds."
+Probes    1 provisional test · 0 still failing
+```
+
+<sub>Layout of the evidence table; the rows are illustrative.</sub>
+
+What happens around a turn (details in [docs/quality-engine.md](docs/quality-engine.md)):
+
+1. **Evidence packet.** Before the model starts, Sutra points it at the likely code using paths and stack frames from your request, symbol definitions and references, failing test names, ranked search and dependency edges. For a bug, it also runs a **baseline** test, but only when that wouldn't bypass your approvals.
+2. **Hypotheses, not guesses.** For hard bugs the model keeps up to three competing explanations and runs the cheapest check that tells them apart. If the same tests keep failing after edits, Sutra says so and asks for exactly that.
+3. **Counterexamples.** An isolated verifier writes tests aimed at boundaries and edge cases. Sutra re-runs each one itself and only accepts real failures, and they're always marked **provisional**, never treated as the truth.
+4. **Competing patches** (deep mode). If the fix still fails, independent attempts start from the original state of the code, each pursuing a different explanation and reusing what the failed attempt learned. The winner is chosen by deterministic rules: tests pass, no test was modified, smallest diff. It's applied through the normal approval-gated tools.
+5. **Independent review.** A separate check infers what the patch does *without* seeing your request, then compares that with what you asked for. It can raise a gap, but never pass a criterion on its own.
+6. **Finish gate.** Sutra enforces the evidence rules itself. Gaps go back to the model with specifics. What can't be verified is reported as unverified.
+
+| `/quality` | What it adds | Typical extra cost |
+| --- | --- | --- |
+| `fast` | Evidence labels only; no extra model calls | none |
+| `balanced` (default) | Packet, baseline, contract, gate, review; counterexamples only when a criterion lacks evidence | small (+32% on the bundled tasks) |
+| `deep` | Plus a second probe round and competing patches when a fix fails | several times more |
+
+On the bundled tasks with live DeepSeek, `balanced` solved 4/4 and its gate said "verified" on exactly those 4, for $0.0074 in total. In `deep` mode the verifier found a real boundary bug the project's tests didn't cover, and the agent fixed it. These tasks are too easy to show pass-rate gains: that needs a harder benchmark, which is the next step.
+
 ## Cost and budgets
 
 Sutra records every request's input, cached, output and reasoning tokens, plus latency and tool time. `/cost` shows the totals:
@@ -341,7 +374,7 @@ Put an `AGENTS.md` in your repository, or `.sutra/AGENTS.md`, to tell Sutra how 
 - **Nothing gets lost.** Every tool call gets exactly one recorded result, including failures, denials and cancellations. Repeated identical calls are detected and stopped.
 - **Careful edits.** Writes are atomic and checked after writing. Sutra won't overwrite a file it hasn't read, or one that changed since it last looked.
 
-**Built-in tools:** `read_file`, `list_directory`, `glob_files`, `search_files`, `grep_search`, `repo_map`, `find_symbol`, `code_search`, `write_file`, `edit_file`, `apply_patch`, `execute_command`, `run_tests`, `git_status`, `git_diff`, `update_plan`.
+**Built-in tools:** `read_file`, `list_directory`, `glob_files`, `search_files`, `grep_search`, `repo_map`, `find_symbol`, `code_search`, `write_file`, `edit_file`, `apply_patch`, `execute_command`, `run_tests`, `git_status`, `git_diff`, `update_plan`, `hypotheses`.
 
 More detail is in [docs/architecture.md](docs/architecture.md).
 
@@ -362,7 +395,7 @@ Every option, and the order in which settings override each other, is listed in 
 
 ## Status
 
-Sutra is an **early preview (v0.1)**. The core is complete and well tested: the agent loop, all tools, permissions, the sandbox, sessions, compaction, cost tracking, audit export, benchmarks and the terminal UI. More than 130 automated tests cover it, including an end-to-end run that fixes the example bug through the real CLI and the real test suite. On macOS they include live sandbox tests that check writes, credential reads and the network are really blocked.
+Sutra is an **early preview (v0.1)**. The core is complete and well tested: the agent loop, all tools, permissions, the sandbox, sessions, compaction, cost tracking, audit export, benchmarks and the terminal UI. More than 170 automated tests cover it, including an end-to-end run that fixes the example bug through the real CLI and the real test suite. On macOS they include live sandbox tests that check writes, credential reads and the network are really blocked.
 
 What to know before relying on it:
 
@@ -386,6 +419,8 @@ What to know before relying on it:
 - [x] Session replay and audit export
 - [x] Benchmark harness with independently verified tasks
 - [x] Repository map, symbol lookup and ranked code search (optional embeddings)
+- [x] Quality engine: evidence packet, finish gate, counterexamples, competing patches, alignment review
+- [ ] A harder held-out benchmark with ablations of each quality layer
 - [ ] Measured gains from the index on large repositories
 - [ ] Published benchmark results across models
 - [ ] Linux CI and Windows support

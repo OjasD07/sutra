@@ -93,6 +93,10 @@ export function StatusView(props: { ui: UiOptions; data: StatusData }) {
         <Dot ui={ui} color={th.accent} /> <Text bold>{profile}</Text>
         <Text color={m}>{`  ${PROFILE_HINT[d.profile] ?? ""}`}</Text>
       </Row>
+      <Row ui={ui} label="Quality">
+        <Dot ui={ui} color={d.quality === "fast" ? th.muted : th.success} /> <Text bold>{d.quality}</Text>
+        <Text color={m}>{`  ${{ fast: "evidence labels only", balanced: "finish gate · review · counterexamples", deep: "+ competing patches" }[d.quality] ?? ""}`}</Text>
+      </Row>
       <Row ui={ui} label="Sandbox">
         <Dot ui={ui} color={d.sandbox.active ? th.success : th.muted} /> <Text color={d.sandbox.active ? undefined : m}>{d.sandbox.text}</Text>
       </Row>

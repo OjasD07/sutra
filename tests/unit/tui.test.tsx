@@ -346,3 +346,35 @@ describe("view helpers", () => {
     expect(bar(0.1, 10, false, 0.75)).toBe("#-------|-"); // tick marks the compaction threshold
   });
 });
+
+describe("evidence table", () => {
+  it("shows each criterion with its supporting check, or why it's unverified", async () => {
+    const { EvidenceTable } = await import("../../src/tui/components.js");
+    const v = {
+      mode: "balanced" as const,
+      kind: "bugfix" as const,
+      overall: "partial" as const,
+      criteria: [
+        { id: "C1", text: "The session tests pass", status: "passed" as const, evidence: ["c3"] },
+        { id: "C2", text: "Expiry is inclusive at the boundary", status: "unverified" as const, evidence: [], note: "no check maps to it" },
+      ],
+      checks: [{ id: "c3", kind: "test" as const, summary: "npm test → exit 0 (4/4 passed)", epoch: 1, passed: true, at: "" }],
+      filesChanged: ["src/session.js"],
+      treeHash: "3f9a2c1e77aa",
+      review: { verdict: "aligned" as const, inferred: "Compares expiry in milliseconds.", gaps: [] },
+      counterexamples: [{ name: "expiry boundary", file: "", content: "", command: "", why: "", failing: false }],
+      candidates: [],
+      hypotheses: [],
+      bounces: 1,
+      auxCostUsd: 0.0021,
+    };
+    const r = render(<EvidenceTable ui={{ theme: darkTheme, color: false }} v={v} />);
+    const f = r.lastFrame()!;
+    expect(f).toMatch(/Evidence\s+\* partial\s+·\s+balanced mode · version 3f9a2c1 · sent back 1× · checks cost \$0\.0021/);
+    expect(f).toMatch(/✓ The session tests pass\s+npm test → exit 0 \(4\/4 passed\)/);
+    expect(f).toMatch(/\? Expiry is inclusive at the boundary\s+no check maps to it/);
+    expect(f).toMatch(/Review\s+aligned\s+"Compares expiry in milliseconds\."/);
+    expect(f).toMatch(/Probes\s+1 provisional test · 0 still failing/);
+    r.unmount();
+  });
+});

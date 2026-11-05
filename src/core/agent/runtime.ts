@@ -22,6 +22,10 @@ import type { PlanStore } from "../planning/plan.js";
 import { LoopDetector } from "./loop-detector.js";
 import type { SandboxStatus } from "../../sandbox/sandbox.js";
 import type { RepoIndexService } from "../../index/service.js";
+import type { QualityEngine, TurnQuality } from "../../quality/engine.js";
+import type { HypothesisLedger } from "../../quality/ledger.js";
+import type { Verification } from "../../quality/types.js";
+import type { UsageTotals } from "../../telemetry/cost.js";
 import type { TestCounts } from "../../tools/shell/test-counts.js";
 
 export interface RuntimeDeps {
@@ -45,6 +49,10 @@ export interface RuntimeDeps {
   sleepFn?: typeof sleep;
   /** Repository index shared by the code-navigation tools. */
   repoIndex?: RepoIndexService | null;
+  /** Quality engine: evidence packet, finish gate, verifier, competing patches. */
+  quality?: QualityEngine | null;
+  /** Hypothesis ledger for the hypotheses tool. */
+  ledger?: HypothesisLedger | null;
   /** OS sandbox for shell commands (absent in delegated tasks and some tests). */
   sandbox?: SandboxStatus;
   /** Default timeout for tools without their own policy. */
@@ -76,6 +84,8 @@ interface TurnState {
   cachedAtStart: number;
   startedAt: number;
   lengthContinuations: number;
+  quality: TurnQuality | null;
+  verification?: Verification | null;
 }
 
 const MAX_STREAM_RESETS = 2;
@@ -187,6 +197,7 @@ export class AgentRuntime {
       cachedAtStart: totals.cachedInputTokens,
       startedAt: Date.now(),
       lengthContinuations: 0,
+      quality: this.d.quality?.startTurn(input, (opts.mode ?? "normal") === "plan") ?? null,
     };
     this.loop.reset();
     this.emit({ type: "turn_start", turn: this.turn, input, mode: this.mode });
@@ -196,7 +207,17 @@ export class AgentRuntime {
       if (over) return this.finish(st, "budget_exceeded", over);
       if (this.d.store && this.turn === 1 && !this.d.store.getSession(this.d.sessionId)?.title)
         this.d.store.updateSession(this.d.sessionId, { title: oneLine(input, 80) });
-      this.append({ role: "user", content: this.mode === "plan" ? `${PLAN_MODE_PREFIX}\n\n${input}` : input });
+      let evidence: string | null = null;
+      if (st.quality) {
+        try {
+          evidence = await st.quality.begin(ac.signal);
+        } catch (err) {
+          if (ac.signal.aborted) throw err;
+          this.emit({ type: "notice", level: "warn", message: `Evidence packet unavailable: ${(err as Error).message}` });
+        }
+      }
+      const body = this.mode === "plan" ? `${PLAN_MODE_PREFIX}\n\n${input}` : input;
+      this.append({ role: "user", content: evidence ? `${body}\n\n${evidence}` : body });
       this.d.store?.updateSession(this.d.sessionId, { status: "running" });
       return await this.loopTurn(st, ac.signal);
     } catch (err) {
@@ -234,6 +255,7 @@ export class AgentRuntime {
         system = this.d.systemPrompt();
       }
 
+      for (const note of st.quality?.takeNotes() ?? []) this.append({ role: "user", content: note });
       st.iterations++;
       this.setStatus("thinking");
       const messages = this.d.context.build(system);
@@ -276,6 +298,16 @@ export class AgentRuntime {
         if (res.finishReason === "content_filter") return this.finish(st, "failed", "The provider stopped the response (content filter).");
         if (res.finishReason === "insufficient_resources") return this.finish(st, "failed", "The provider reported insufficient system resources. Try again shortly.");
         if (res.finishReason === "length") return this.finish(st, "failed", "The response was truncated by the output token limit.");
+        // The model stopping is a claim, not a result: the harness checks the evidence.
+        if (st.quality) {
+          this.setStatus("executing");
+          const decision = await st.quality.finish(message.content, signal);
+          if (decision.action === "continue") {
+            this.append({ role: "user", content: decision.message });
+            continue;
+          }
+          st.verification = decision.verification;
+        }
         return this.finish(st, "completed");
       }
 
@@ -341,19 +373,43 @@ export class AgentRuntime {
     return m;
   }
 
-  private recordUsage(model: string, usage: TokenUsage | null, latencyMs: number, estimate: number): void {
+  /** Usage of a harness-made model call (contract, judge, review): counted in cost, not used for calibration. */
+  recordAuxiliaryUsage(model: string, usage: TokenUsage | null, latencyMs: number): number | null {
+    return this.recordUsage(model, usage, latencyMs, -1);
+  }
+
+  /** Fold a sub-agent's totals (verifier, candidates) into this session's spend. Their detail lives in their own sessions. */
+  recordSubAgentUsage(t: UsageTotals): void {
+    this.d.usage.merge(t);
+    this.d.store?.recordUsage(
+      this.d.sessionId,
+      `${this.model} (sub-agents)`,
+      { inputTokens: t.inputTokens, outputTokens: t.outputTokens, reasoningTokens: t.reasoningTokens, cachedInputTokens: t.cachedInputTokens },
+      t.modelLatencyMs,
+      t.costIncomplete ? null : t.costUsd,
+    );
+    this.emit({ type: "usage", usage: null, costUsd: t.costUsd, latencyMs: t.modelLatencyMs, totals: { ...this.d.usage.totals } });
+  }
+
+  /** Quality-engine progress, shown in the thread. */
+  emitQuality(e: { stage: string; message: string; level: "info" | "warn" }): void {
+    this.emit({ type: "quality", ...e });
+  }
+
+  private recordUsage(model: string, usage: TokenUsage | null, latencyMs: number, estimate: number): number | null {
     const price = this.d.config.pricing[model] ?? this.d.config.pricing[this.model];
     // Local inference has no per-token price unless the user configured one.
     const cost = usage ? (price ? estimateCost(usage, price) : this.d.provider.freeOfCharge ? 0 : null) : null;
     this.d.usage.recordRequest(usage, latencyMs, cost);
     this.d.store?.recordUsage(this.d.sessionId, model, usage, latencyMs, cost);
-    if (usage) this.d.context.estimator.calibrate(estimate, usage.inputTokens);
+    if (usage && estimate >= 0) this.d.context.estimator.calibrate(estimate, usage.inputTokens);
     this.emit({ type: "usage", usage, costUsd: cost, latencyMs, totals: { ...this.d.usage.totals } });
     const limit = this.d.config.budget.maxSessionCostUsd;
     if (limit && !this.budgetWarned && this.d.usage.totals.costUsd >= limit * this.d.config.budget.warnAtFraction) {
       this.budgetWarned = true;
       this.emit({ type: "budget_warning", spentUsd: this.d.usage.totals.costUsd, limitUsd: limit });
     }
+    return cost;
   }
 
   // ----------------------------------------------------------------- tools
@@ -397,6 +453,7 @@ export class AgentRuntime {
       },
       sandbox: this.d.sandbox?.runner ?? null,
       repoIndex: this.d.repoIndex ?? null,
+      hypotheses: this.d.ledger ?? null,
       sandboxRequired: this.d.sandbox?.mode === "required",
       allowNetwork,
       onProgress: (chunk) => this.emit({ type: "tool_progress", toolCallId: callId, chunk: this.d.redactor.redact(chunk) }),
@@ -507,6 +564,7 @@ export class AgentRuntime {
   private afterTool(p: PreparedCall, st: TurnState): void {
     const r = p.result!;
     const tool = p.tool!;
+    st.quality?.observe({ name: tool.name, category: tool.category, readOnly: tool.readOnly, outcome: p.outcome ?? "ok", result: r });
     if (r.ok && !tool.readOnly && tool.category !== "internal") {
       this.loop.advanceEpoch();
       this.d.repoIndex?.markDirty();
@@ -635,9 +693,12 @@ export class AgentRuntime {
   private finish(st: TurnState, status: TerminalStatus, reason?: string): TurnResult {
     this.setStatus(status);
     const t = this.d.usage.totals;
+    if (st.verification === undefined && st.quality) st.verification = st.quality.partial();
+    if (st.verification) this.d.store?.saveVerification(this.d.sessionId, this.turn, st.verification);
     const result: TurnResult = {
       status,
       mode: this.mode,
+      ...(st.verification ? { verification: st.verification } : {}),
       ...(reason ? { reason } : {}),
       iterations: st.iterations,
       toolCalls: st.toolCalls,

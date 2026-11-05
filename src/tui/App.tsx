@@ -84,6 +84,17 @@ export interface AppProps {
 
 let nextId = 1;
 
+const QUALITY_LABEL: Record<string, string> = {
+  packet: "Evidence",
+  baseline: "Baseline",
+  contract: "Contract",
+  stall: "Stuck?",
+  verify: "Verifier",
+  review: "Review",
+  gate: "Finish gate",
+  branch: "Patches",
+};
+
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
 /** One-line summary of what a call targets, from its validated arguments. */
@@ -338,6 +349,9 @@ export function App(props: AppProps) {
         case "notice":
           notice(e.level, e.message, e.level === "info" ? "Info" : e.level === "warn" ? "Note" : "Error");
           break;
+        case "quality":
+          notice(e.level, e.message, QUALITY_LABEL[e.stage] ?? "Quality");
+          break;
         case "turn_end":
           flushLive();
           setRunning(new Map());
@@ -433,6 +447,7 @@ export function App(props: AppProps) {
         budgetUsd: config.budget.maxSessionCostUsd,
         sessions: value.startsWith("/sessions ") || value.startsWith("/resume ") ? store.listSessions(session.workspace.root, 30) : [],
         currentSessionId: session.record.id,
+        quality: session.quality.mode,
       }),
     [provider, session, config, store],
   );

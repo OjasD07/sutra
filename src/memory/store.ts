@@ -103,6 +103,11 @@ const MIGRATIONS: string[] = [
      id INTEGER PRIMARY KEY AUTOINCREMENT,
      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
      latency_ms INTEGER NOT NULL);`,
+  `CREATE TABLE verifications (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+     turn INTEGER NOT NULL, json TEXT NOT NULL, created_at TEXT NOT NULL);
+   CREATE INDEX verifications_session ON verifications(session_id);`,
 ];
 
 /**
@@ -288,6 +293,15 @@ export class SessionStore {
       costUsd: (r.cost_usd as number | null) ?? null,
       createdAt: r.created_at as string,
     }));
+  }
+
+  saveVerification(sessionId: string, turn: number, v: unknown): void {
+    this.db.prepare("INSERT INTO verifications (session_id, turn, json, created_at) VALUES (?,?,?,?)").run(sessionId, turn, JSON.stringify(v), new Date().toISOString());
+  }
+
+  listVerifications<T = unknown>(sessionId: string): { turn: number; verification: T; createdAt: string }[] {
+    const rows = this.db.prepare("SELECT turn, json, created_at FROM verifications WHERE session_id = ? ORDER BY id").all(sessionId) as { turn: number; json: string; created_at: string }[];
+    return rows.map((r) => ({ turn: r.turn, verification: JSON.parse(r.json) as T, createdAt: r.created_at }));
   }
 
   listCompactions(sessionId: string): CompactionRecord[] {

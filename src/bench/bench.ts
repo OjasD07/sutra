@@ -47,6 +47,9 @@ export interface BenchResult {
   sessionId: string;
   verifyExitCode: number | null;
   verifyTail: string;
+  /** The harness's own finish-gate verdict (compare with `passed`, which is the independent check). */
+  evidence?: string;
+  quality: string;
 }
 
 export interface BenchReport {
@@ -162,11 +165,13 @@ export async function runBench(o: BenchOptions): Promise<BenchReport> {
     let agentStatus = "error";
     let reason: string | undefined;
     let filesChanged: string[] = [];
+    let evidence: string | undefined;
     try {
       const r = await session.runtime.runTurn(task.prompt, signal);
       agentStatus = timeout.aborted ? "timeout" : r.status;
       reason = r.reason;
       filesChanged = r.filesChanged;
+      evidence = r.verification?.overall;
     } catch (err) {
       reason = (err as Error).message;
     } finally {
@@ -193,6 +198,8 @@ export async function runBench(o: BenchOptions): Promise<BenchReport> {
       sessionId: session.record.id,
       verifyExitCode: v.exitCode,
       verifyTail: (v.stdout + v.stderr).trim().split("\n").slice(-6).join("\n"),
+      ...(evidence ? { evidence } : {}),
+      quality: config.quality.mode,
     };
     spent += t.costUsd;
     results.push(result);

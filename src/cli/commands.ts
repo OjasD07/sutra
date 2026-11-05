@@ -28,6 +28,7 @@ export interface StatusData {
   contextTokens: number;
   compactAt: number;
   thinking: string | null;
+  quality: string;
   profile: string;
   sandbox: { active: boolean; text: string };
   index: { files: number; symbols: number; mode: string } | null;
@@ -77,6 +78,7 @@ export const COMMANDS: { name: string; args?: string; help: string }[] = [
   { name: "permissions", args: "[inspect|confirm|flow]", help: "Show or change the permission profile" },
   { name: "sessions", args: "[id]", help: "Browse recent sessions in this workspace and resume one" },
   { name: "resume", args: "<id>", help: "Switch to a saved session" },
+  { name: "quality", args: "[fast|balanced|deep]", help: "How much verification to spend: evidence only, gate + review + probes, or competing patches" },
   { name: "export", args: "[md|json]", help: "Write an audit report of this session (~/.sutra/exports)" },
   { name: "exit", help: "Exit Sutra" },
 ];
@@ -168,6 +170,7 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
         contextTokens: est,
         compactAt: session.context.budget.threshold,
         thinking: info.supportsThinking ? (config.thinking === "enabled" ? `on · effort ${config.reasoningEffort}` : "off") : null,
+        quality: session.quality.mode,
         profile: session.permissions.policy.profile,
         sandbox: { active: !!session.sandbox.runner, text: sandboxSummary(session.sandbox) },
         index: stats ? { files: stats.files, symbols: stats.symbols, mode: session.repoIndex?.embeddingModel ? `BM25 + embeddings (${session.repoIndex.embeddingModel})` : "BM25" } : null,
@@ -248,6 +251,14 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
       if (!list.length) return { output: "No sessions for this workspace." };
       const rows = list.map((s) => `  ${s.id.slice(0, 8)}  ${s.updatedAt.slice(0, 16).replace("T", " ")}  ${s.status.padEnd(15)} ${s.title ?? "(untitled)"}${s.id === session.record.id ? "  ← current" : ""}`);
       return { output: `Recent sessions\n${rows.join("\n")}\n\nResume one with /resume <id>, or type /sessions and pick from the list.` };
+    }
+    case "quality": {
+      const q = session.quality;
+      if (!arg) return { output: `Quality mode: ${q.mode}\n\n  fast      evidence labels only; no extra model calls\n  balanced  evidence packet, task contract, finish gate, independent review, one counterexample round\n  deep      adds a second round and competing patches when the first fix fails\n\nSwitch with /quality <mode>.` };
+      if (arg !== "fast" && arg !== "balanced" && arg !== "deep") return { output: "Usage: /quality fast|balanced|deep" };
+      q.mode = arg;
+      config.quality.mode = arg;
+      return { output: `Quality mode set to ${arg}. Applies from the next turn.` };
     }
     case "export": {
       const format = (arg || "md").toLowerCase();

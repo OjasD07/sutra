@@ -18,6 +18,8 @@ src/
   sandbox/      OS sandbox: Seatbelt profile (macOS), bubblewrap args (Linux)
   index/        repository index: symbol extraction, reference graph + PageRank map,
                 BM25 chunk search, optional embeddings
+  quality/      quality engine: evidence packet, finish gate, counterexample verifier,
+                competing patches, alignment review, hypothesis ledger, snapshots
   audit/        session audit model, replay timeline, Markdown/JSON export
   bench/        benchmark runner and reports
   tools/        Tool interface, registry, filesystem / shell / git / plan tools
@@ -107,6 +109,10 @@ The system prompt stays stable within a session. The plan reaches the model thro
 ## Sandbox
 
 `createSandbox(mode, policy)` probes for a working backend once (by running a trivial sandboxed command) and returns a `SandboxRunner` that wraps a shell command into an argv: `sandbox-exec -p <profile> /bin/sh -c …` on macOS, `bwrap … /bin/sh -c …` on Linux. The runtime passes the runner to shell tools through `ToolContext`, with a per-call `allowNetwork` flag. That flag is set when the permission engine's command assessment says the command needs the network, which means the user approved it as a network command. See [security.md](security.md).
+
+## Quality engine
+
+The runtime calls a per-turn `TurnQuality` at four points: `begin` (before the first inference; its text is appended to the request), `observe` (after every tool result), `takeNotes` (before each inference) and `finish` (whenever the model stops calling tools). `finish` either returns a message to continue the loop (the finish gate sending work back) or a `Verification` that is attached to the turn result and saved. The runtime stays independent of the engine's internals. See [quality-engine.md](quality-engine.md).
 
 ## Repository index
 

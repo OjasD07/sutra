@@ -49,3 +49,34 @@ export function parseTestCounts(raw: string): TestCounts | null {
   if (mochaPass !== null) return make(mochaPass, num(/^\s*(\d+) failing/m) ?? 0);
   return null;
 }
+
+/**
+ * Names of failing tests, from common runners' output (node:test "not ok N -",
+ * vitest/jest "×"/"✕"/"●", pytest "FAILED", cargo "test x ... FAILED", mocha
+ * numbered failures). Best effort: an empty list means "not parsed", not "none".
+ */
+export function parseFailingTests(raw: string, limit = 20): string[] {
+  const out = raw.replace(ANSI, "");
+  const names: string[] = [];
+  const add = (s: string | undefined) => {
+    const v = s?.trim().replace(/\s+\(?\d+(\.\d+)?m?s\)?$/, "");
+    if (v && !names.includes(v) && names.length < limit) names.push(v);
+  };
+  for (const m of out.matchAll(/^\s*not ok \d+ - (.+?)(?:\s+#.*)?$/gm)) add(m[1]);
+  // node:test spec reporter: "✖ name (1.07ms)" (skip the "✖ failing tests:" header)
+  for (const m of out.matchAll(/^\s*✖ (.+?)(?: \([\d.]+m?s\))?$/gm)) if (!/^failing tests:?$/.test(m[1]!)) add(m[1]);
+  for (const m of out.matchAll(/^\s*(?:×|✕|✗|FAIL\s+\S+\s+>)\s+(.+)$/gm)) add(m[1]);
+  for (const m of out.matchAll(/^\s*● (.+?) › (.+)$/gm)) add(`${m[1]} › ${m[2]}`);
+  for (const m of out.matchAll(/^FAILED (\S+::\S+)/gm)) add(m[1]);
+  for (const m of out.matchAll(/^test (\S+) \.\.\. FAILED$/gm)) add(m[1]);
+  for (const m of out.matchAll(/^\s+\d+\) (.+)$/gm)) if (/failing/.test(out)) add(m[1]);
+  return names;
+}
+
+/** A stable signature of a failing test set, for spotting "same failure again". */
+export function failureSignature(raw: string): string | null {
+  const names = parseFailingTests(raw, 50).sort();
+  if (names.length) return names.join("|");
+  const counts = parseTestCounts(raw);
+  return counts && counts.failed > 0 ? `failed:${counts.failed}/${counts.total}` : null;
+}

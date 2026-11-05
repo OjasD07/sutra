@@ -17,7 +17,7 @@ function runCli(args: string[], cwd: string, env: Record<string, string>): Promi
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ["--import", TSX, join(ROOT, "src", "index.ts"), ...args], {
       cwd,
-      env: { ...process.env, ...env, NO_COLOR: "1" },
+      env: { ...process.env, SUTRA_QUALITY: "fast", ...env, NO_COLOR: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

@@ -25,6 +25,7 @@ Set `SUTRA_HOME` to relocate `~/.sutra`.
 | `DEEPSEEK_MODEL` | e.g. `deepseek-flash`, `deepseek-v4-pro` (DeepSeek only) |
 | `SUTRA_PROVIDER` | `deepseek` (default), `ollama` or `openai-compatible` |
 | `SUTRA_MODEL` | model for any provider |
+| `SUTRA_QUALITY` | `fast` / `balanced` / `deep` |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` | endpoint and key for `openai-compatible` |
 | `OLLAMA_HOST` | Ollama address, e.g. `127.0.0.1:11434` (Sutra adds `/v1`) |
 | `SUTRA_PROFILE` | `inspect` / `confirm` / `flow` |
@@ -107,6 +108,14 @@ For Ollama and OpenAI-compatible servers there is no built-in default model. Sut
 **Context windows for local models.** Sutra can't reliably learn a local server's context length, so it assumes `providers.ollama.contextWindow` (default 32768) or `providers.openai.contextWindow` (default 128000) for models without metadata. Make these match your server. Ollama in particular **silently truncates** prompts longer than its configured context (`OLLAMA_CONTEXT_LENGTH`, or the model's `num_ctx`), which shows up as the agent "forgetting" the task.
 
 The OpenAI-compatible adapter sends standard Chat Completions (streaming, `tools`, `stream_options.include_usage`). It reads streamed reasoning from `reasoning_content` or `reasoning` (Ollama, OpenRouter) for progress display, but doesn't send it back, because generic servers don't expect it.
+
+## Quality
+
+```json
+{ "quality": { "mode": "balanced" } }
+```
+
+`fast`, `balanced` or `deep`. Also `--quality <mode>`, `SUTRA_QUALITY` and `/quality`. See [quality-engine.md](quality-engine.md) for what each mode does and costs.
 
 ## Repository index
 

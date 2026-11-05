@@ -38,10 +38,11 @@ export interface SuggestionContext {
   budgetUsd: number | undefined;
   sessions: SessionRecord[];
   currentSessionId: string;
+  quality?: string;
 }
 
 /** Commands whose value can be picked from a list. */
-export const PICKABLE = new Set(["model", "permissions", "budget", "sessions", "resume", "export", "plan"]);
+export const PICKABLE = new Set(["model", "permissions", "budget", "sessions", "resume", "export", "plan", "quality"]);
 
 const BUDGET_PRESETS = [0.25, 0.5, 1, 2, 5, 10];
 
@@ -142,6 +143,14 @@ function choices(cmd: string, query: string, ctx: SuggestionContext): Suggestion
       if (matches(query, "go")) items.push({ key: "go", label: "go", hint: "approve the current plan and carry it out", submit: "/plan go" });
       if (!query) items.push({ key: "show", label: "show", hint: "show the current plan", submit: "/plan" });
       return { kind: "choices", title: query ? "Plan" : "Plan · or type a task to plan it read-only first", items };
+    }
+    case "quality": {
+      const items: Suggestion[] = [
+        { key: "fast", label: "fast", hint: "evidence labels only; no extra model calls", submit: "/quality fast" },
+        { key: "balanced", label: "balanced", hint: "finish gate, independent review, one counterexample round", submit: "/quality balanced" },
+        { key: "deep", label: "deep", hint: "adds competing patches when the first fix fails", submit: "/quality deep" },
+      ].filter((i) => matches(query, i.label));
+      return { kind: "choices", title: "Quality mode", items: items.map((i) => (i.key === ctx.quality ? { ...i, current: true } : i)) };
     }
     case "export": {
       const items: Suggestion[] = [

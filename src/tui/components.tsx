@@ -7,6 +7,7 @@ import type { Plan } from "../core/planning/plan.js";
 import { t } from "../i18n/index.js";
 import type { ApprovalChoice } from "../permissions/engine.js";
 import { formatUsd } from "../telemetry/cost.js";
+import type { Check, Criterion, Verification } from "../quality/types.js";
 import { parseUnifiedDiff, renderMarkdown } from "./highlight.js";
 import type { Suggestion, SuggestionList } from "./suggestions.js";
 import { threadGlyphs, type Theme } from "./theme.js";
@@ -591,7 +592,66 @@ export function TurnSummary(props: { ui: UiOptions; result: TurnResult; budgetUs
             </Box>
           ))}
         </Box>
+        {result.verification ? <EvidenceTable ui={ui} v={result.verification} /> : null}
       </Box>
+    </Box>
+  );
+}
+
+/** The finish gate's verdict: each acceptance criterion with the check that supports it (or why none does). */
+export function EvidenceTable(props: { ui: UiOptions; v: Verification }) {
+  const { ui, v } = props;
+  const th = ui.theme;
+  const width = useContentWidth();
+  const m = col(ui, th.muted);
+  const overallColor = { verified: th.success, partial: th.accent, unverified: th.muted, failed: th.error }[v.overall];
+  const glyph = (s: Criterion["status"]): [string, string] => (s === "passed" ? ["✓", th.success] : s === "failed" ? ["✗", th.error] : ["?", th.accent]);
+  const byId = new Map(v.checks.map((c) => [c.id, c]));
+  const failingCx = v.counterexamples.filter((c) => c.failing).length;
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text wrap="truncate-end">
+        <Text color={m}>{"Evidence".padEnd(10)}</Text>
+        <Text color={col(ui, overallColor)} bold>
+          {ui.color ? "● " : "* "}
+          {v.overall}
+        </Text>
+        <Text color={m}>{`  ·  ${v.mode} mode${v.treeHash ? ` · version ${v.treeHash.slice(0, 7)}` : ""}${v.bounces ? ` · sent back ${v.bounces}×` : ""}${v.auxCostUsd ? ` · checks cost ${formatUsd(v.auxCostUsd)}` : ""}`}</Text>
+      </Text>
+      {v.criteria.map((c) => {
+        const [g, gc] = glyph(c.status);
+        const ev = c.evidence.map((id) => byId.get(id)).filter((x): x is Check => !!x);
+        const detail = ev.length ? ev.map((e) => `${e.summary}${e.provisional ? " (provisional)" : ""}`).join("; ") : (c.note ?? c.status);
+        return (
+          <Text key={c.id} wrap="truncate-end">
+            {"          "}
+            <Text color={col(ui, gc)}>{g} </Text>
+            <Text>{truncate(c.text, Math.max(20, Math.floor(width * 0.45)))}</Text>
+            <Text color={m}>{`  ${truncate(detail, Math.max(20, width - Math.floor(width * 0.45) - 16))}`}</Text>
+          </Text>
+        );
+      })}
+      {v.review ? (
+        <Text wrap="truncate-end">
+          <Text color={m}>{"Review".padEnd(10)}</Text>
+          <Text color={col(ui, v.review.verdict === "aligned" ? th.success : v.review.verdict === "unknown" ? th.muted : th.accent)}>{v.review.verdict}</Text>
+          <Text color={m}>{v.review.inferred ? `  "${truncate(v.review.inferred, width - 24)}"` : ""}</Text>
+        </Text>
+      ) : null}
+      {v.counterexamples.length ? (
+        <Text wrap="truncate-end">
+          <Text color={m}>{"Probes".padEnd(10)}</Text>
+          <Text color={col(ui, failingCx ? th.error : th.success)}>{`${v.counterexamples.length} provisional test${v.counterexamples.length > 1 ? "s" : ""} · ${failingCx} still failing`}</Text>
+          <Text color={m}>{`  ${v.counterexamples.map((c) => c.name).join(", ")}`}</Text>
+        </Text>
+      ) : null}
+      {v.candidates.length ? (
+        <Text wrap="truncate-end">
+          <Text color={m}>{"Patches".padEnd(10)}</Text>
+          <Text>{v.candidates.map((c) => `${c.label}${c.selected ? " ✓" : ""}`).join("  ")}</Text>
+          <Text color={m}>{`  ${v.candidates.map((c) => `${c.label}: ${c.reason}`).join(" · ")}`}</Text>
+        </Text>
+      ) : null}
     </Box>
   );
 }

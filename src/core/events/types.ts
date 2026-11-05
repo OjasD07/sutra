@@ -4,6 +4,7 @@ import type { UsageTotals } from "../../telemetry/cost.js";
 import type { ToolPreview, ToolResult } from "../../tools/types.js";
 import type { Plan } from "../planning/plan.js";
 import type { TestCounts } from "../../tools/shell/test-counts.js";
+import type { Verification } from "../../quality/types.js";
 
 export type AgentStatus =
   | "idle"
@@ -34,6 +35,8 @@ export interface TurnResult {
   cachedInputTokens: number;
   durationMs: number;
   testsRun: { command: string; passed: boolean; counts?: TestCounts }[];
+  /** Harness-owned evidence for the turn (finish gate). Absent when nothing was changed or checked. */
+  verification?: Verification;
 }
 
 export interface ApprovalRequest {
@@ -74,6 +77,7 @@ export type AgentEvent =
   | { type: "compaction"; tokensBefore: number; tokensAfter: number; usedModel: boolean; manual: boolean }
   | { type: "plan"; plan: Plan | null }
   | { type: "notice"; level: "info" | "warn" | "error"; message: string }
+  | { type: "quality"; stage: string; message: string; level: "info" | "warn" }
   | { type: "turn_end"; result: TurnResult };
 
 export type AgentListener = (e: AgentEvent) => void;

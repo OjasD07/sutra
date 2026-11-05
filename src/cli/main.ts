@@ -63,6 +63,7 @@ export async function main(argv: string[]): Promise<number> {
 
   if (args.sandbox) config.sandbox.mode = args.sandbox;
   if (!args.index) config.index.enabled = false;
+  if (args.quality) config.quality.mode = args.quality;
 
   // Commands that only read the local session store need no provider.
   if (args.command === "replay" || args.command === "export") {

@@ -8,6 +8,7 @@ import { openSession, type SessionHandle } from "../../src/core/session.js";
 import { SessionStore } from "../../src/memory/store.js";
 import type { ApprovalChoice } from "../../src/permissions/engine.js";
 import type { ModelProvider } from "../../src/providers/types.js";
+import type { SandboxStatus } from "../../src/sandbox/sandbox.js";
 
 export function tempDir(prefix = "sutra-test-"): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -26,6 +27,8 @@ export function testConfig(overrides: Partial<SutraConfig> = {}): SutraConfig {
   c.model = "deepseek-flash";
   c.pricing = { ...DEFAULT_PRICING };
   c.providers.deepseek.apiKey = "sk-test-key-0000000000000000";
+  // Quality layers that make extra model calls would consume scripted replies; tests opt in explicitly.
+  c.quality.mode = "fast";
   return { ...c, ...overrides };
 }
 
@@ -47,6 +50,7 @@ export function createHarness(opts: {
   workspace?: string;
   dbFile?: string;
   resumeId?: string;
+  sandbox?: SandboxStatus;
 }): Harness {
   const workspace = opts.workspace ?? tempDir();
   const home = tempDir("sutra-home-");
@@ -61,6 +65,7 @@ export function createHarness(opts: {
     store,
     workspaceRoot: workspace,
     ...(opts.resumeId ? { resumeId: opts.resumeId } : {}),
+    ...(opts.sandbox ? { sandbox: opts.sandbox } : {}),
     approve: async (r) => {
       approvals.push(r);
       return opts.approve ? opts.approve(r) : "once";

@@ -51,6 +51,9 @@ export async function runHeadless(session: SessionHandle, prompt: string, opts: 
       case "notice":
         err(`[${e.level}] ${e.message}`);
         break;
+      case "quality":
+        err(c.hex(opts.theme.info)(`[quality · ${e.stage}] ${e.message}`));
+        break;
       case "budget_warning":
         err(c.hex(opts.theme.accent)(`[budget: ${formatUsd(e.spentUsd)} of ${formatUsd(e.limitUsd)} used]`));
         break;
@@ -66,6 +69,19 @@ export async function runHeadless(session: SessionHandle, prompt: string, opts: 
       if (result.filesChanged.length) err(`  Files changed   ${result.filesChanged.join(", ")}`);
       for (const tr of result.testsRun) err(`  Tests           ${tr.passed ? "passed" : "failed"} (${tr.command})`);
       err(`  Estimated cost  ${formatUsd(result.costUsd)}   session ${session.record.id.slice(0, 8)}`);
+      const v = result.verification;
+      if (v) {
+        const checks = new Map(v.checks.map((x) => [x.id, x]));
+        err(`  Evidence        ${v.overall} (${v.mode} mode${v.treeHash ? `, version ${v.treeHash.slice(0, 7)}` : ""}${v.bounces ? `, sent back ${v.bounces}x` : ""})`);
+        for (const cr of v.criteria) {
+          const mark = cr.status === "passed" ? "✓" : cr.status === "failed" ? "✗" : "?";
+          const ev = cr.evidence.map((id) => checks.get(id)?.summary).filter(Boolean).join("; ");
+          err(`    ${mark} ${cr.text} — ${ev || cr.note || cr.status}`);
+        }
+        if (v.review) err(`  Review          ${v.review.verdict}${v.review.inferred ? `: ${oneLine(v.review.inferred, 120)}` : ""}`);
+        if (v.counterexamples.length) err(`  Probes          ${v.counterexamples.length} provisional, ${v.counterexamples.filter((x) => x.failing).length} still failing`);
+        if (v.candidates.length) err(`  Patches         ${v.candidates.map((x) => `${x.label}${x.selected ? " (selected)" : ""}: ${x.reason}`).join(" · ")}`);
+      }
     }
     return result;
   } finally {

@@ -111,6 +111,7 @@ export function loadConfig(workspace: string, cli: CliOverrides = {}, env = proc
   if (env.OLLAMA_HOST) config.providers.ollama.baseUrl = ollamaUrl(env.OLLAMA_HOST);
   if (env.DEEPSEEK_MODEL && config.provider === "deepseek") config.model = env.DEEPSEEK_MODEL;
   if (env.SUTRA_MODEL) config.model = env.SUTRA_MODEL;
+  if (env.SUTRA_QUALITY === "fast" || env.SUTRA_QUALITY === "balanced" || env.SUTRA_QUALITY === "deep") config.quality.mode = env.SUTRA_QUALITY;
   if (env.SUTRA_PROFILE && ["inspect", "confirm", "flow"].includes(env.SUTRA_PROFILE))
     config.permissions.profile = env.SUTRA_PROFILE as PermissionProfile;
 

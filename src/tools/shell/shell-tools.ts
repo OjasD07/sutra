@@ -4,7 +4,7 @@ import { z } from "zod";
 import { scrubEnv } from "../../permissions/sensitive.js";
 import { runProcess, type ProcessResult } from "../../utils/process.js";
 import { truncateMiddle } from "../../utils/text.js";
-import { parseTestCounts } from "./test-counts.js";
+import { parseFailingTests, parseTestCounts } from "./test-counts.js";
 import { fail, ok, type Tool, type ToolContext, type ToolResult } from "../types.js";
 
 const MAX_TIMEOUT_MS = 30 * 60_000;
@@ -162,6 +162,8 @@ export const runTestsTool: Tool<{ filter?: string; timeout_ms?: number }> = {
       r.data.passed = r.data.exitCode === 0;
       const counts = parseTestCounts(r.output);
       if (counts) r.data.counts = counts;
+      const failing = parseFailingTests(r.output);
+      if (failing.length) r.data.failing = failing;
     }
     return r;
   },

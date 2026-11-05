@@ -1,6 +1,7 @@
 import type { CompactionRecord, SessionRecord, SessionStore, ToolInvocationRecord, UsageRecord } from "../memory/store.js";
 import type { Message } from "../providers/types.js";
 import type { UsageTotals } from "../telemetry/cost.js";
+import type { Verification } from "../quality/types.js";
 
 /**
  * A complete, reasoning-free record of one session, built only from what the
@@ -47,6 +48,7 @@ export interface SessionAudit {
   filesChanged: string[];
   commands: { command: string; exitCode: number | null; durationMs: number | null; sandbox?: string }[];
   privacy: string;
+  verifications: { turn: number; verification: Verification }[];
 }
 
 function parseArgs(raw: string): unknown {
@@ -126,6 +128,7 @@ export function buildAudit(store: SessionStore, sessionId: string): SessionAudit
     unpairedUsage: usage.slice(assistantIndex),
     filesChanged: [...files],
     commands,
+    verifications: store.listVerifications<Verification>(session.id).map((x) => ({ turn: x.turn, verification: x.verification })),
     privacy: "Private model reasoning is stored locally for protocol-correct resumption but is excluded from this audit. Tool output was redacted for known secrets when it was recorded.",
   };
 }

@@ -10,7 +10,7 @@ export function renderBenchRow(r: BenchResult, theme: Theme, color: boolean): st
   const c = color ? new Chalk() : new Chalk({ level: 0 });
   const mark = r.passed ? c.hex(theme.success)("✓ pass") : c.hex(theme.error)("✗ fail");
   const cost = r.costComplete ? formatUsd(r.costUsd) : `${formatUsd(r.costUsd)}+`;
-  return `  ${mark}  ${r.task.padEnd(18)} ${cost.padStart(9)}  ${secs(r.durationMs).padStart(7)}  ${String(r.requests).padStart(3)} req  ${String(r.toolCalls).padStart(3)} tools  ${c.hex(theme.muted)(`${r.agentStatus} · ${r.sessionId.slice(0, 8)}`)}`;
+  return `  ${mark}  ${r.task.padEnd(18)} ${cost.padStart(9)}  ${secs(r.durationMs).padStart(7)}  ${String(r.requests).padStart(3)} req  ${String(r.toolCalls).padStart(3)} tools  ${c.hex(theme.muted)(`${r.agentStatus}${r.evidence ? ` · gate: ${r.evidence}` : ""} · ${r.sessionId.slice(0, 8)}`)}`;
 }
 
 export function renderBenchSummary(report: BenchReport, theme: Theme, color: boolean): string {
