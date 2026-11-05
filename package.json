@@ -4,6 +4,15 @@
   "description": "Sutra (सूत्र) — an open-source, model-independent AI coding agent harness. The thread that connects intelligence to action.",
   "type": "module",
   "license": "Apache-2.0",
+  "author": "cneuralnetwork",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cneuralnetwork/sutra.git"
+  },
+  "homepage": "https://github.com/cneuralnetwork/sutra#readme",
+  "bugs": {
+    "url": "https://github.com/cneuralnetwork/sutra/issues"
+  },
   "bin": {
     "sutra": "dist/index.js"
   },

@@ -93,7 +93,7 @@ How to read it: each turn is one **thread**. Sutra's explanations sit on the `â”
 **1. Install.** You need Node.js 22.13 or newer, on macOS or Linux. `ripgrep` is optional and makes search faster.
 
 ```bash
-git clone <repository-url> sutra
+git clone https://github.com/cneuralnetwork/sutra.git
 cd sutra
 npm install
 npm run build
