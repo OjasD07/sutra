@@ -103,6 +103,32 @@ describe("benchmark tasks", () => {
     }
   }, 60_000);
 
+  it("counts denied, invalid and unknown tool calls the same everywhere", async () => {
+    // Regression: the live bench reported 6 tool calls for a run whose replay showed 7,
+    // because calls that never executed (here: denied) weren't counted in memory.
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: "read_file", args: { path: "src/session.js" } }] },
+      { toolCalls: [{ name: "edit_file", args: { path: "src/session.js", old_string: "return session.expiresAt < now;", new_string: "return session.expiresAt * 1000 <= now;" } }] },
+      {
+        toolCalls: [
+          { name: "execute_command", args: { command: "node -e 'console.log(1)'" } }, // needs approval → denied
+          { name: "no_such_tool", args: {} }, // unknown
+          { name: "read_file", args: { wrong: true } }, // invalid arguments
+        ],
+      },
+      { content: "Done." },
+    ]);
+    h = createHarness({ provider });
+    const report = await runBench({ tasks: tasks.filter((t) => t.id === "session-expiry"), config: testConfig(), provider, store: h.store, maxCostPerTaskUsd: 0.5, sandbox: noSandbox });
+    const r = report.results[0]!;
+    const recorded = h.store.listToolInvocations(r.sessionId);
+    expect(recorded.map((t) => t.status)).toEqual(["ok", "ok", "denied", "error", "error"]);
+    expect(r.toolCalls).toBe(5);
+    expect(h.store.usageTotals(r.sessionId).toolCalls).toBe(5);
+    expect(buildAudit(h.store, r.sessionId).turns[0]!.steps.flatMap((s) => s.tools)).toHaveLength(5);
+    expect(r.passed).toBe(true);
+  }, 60_000);
+
   it("judges runs by the task's own tests, not by what the agent claims", async () => {
     // session-expiry: a genuine fix. pagination: the "agent" deletes the tests
     // and claims success; protected tests are restored, so it still fails.

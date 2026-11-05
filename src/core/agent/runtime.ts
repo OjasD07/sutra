@@ -556,6 +556,8 @@ export class AgentRuntime {
             ...(p.deniedBy ? { deniedBy: p.deniedBy } : {}),
           });
           this.persistInvocation(p, new Date(), 0);
+          // Count it like the store does, so /cost, the status bar and bench agree with replay.
+          this.d.usage.recordTool(0);
           if (p.tool) this.afterTool(p, st);
         }
       }
