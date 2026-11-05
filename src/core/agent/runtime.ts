@@ -1,0 +1,621 @@
+import type { SutraConfig } from "../../config/schema.js";
+import type { ContextManager } from "../../context/manager.js";
+import type { SessionStore } from "../../memory/store.js";
+import type { ApprovalChoice, PermissionEngine } from "../../permissions/engine.js";
+import { PathViolation, type Workspace } from "../../permissions/paths.js";
+import type { SecretRedactor } from "../../permissions/sensitive.js";
+import { ProviderError } from "../../providers/errors.js";
+import { generateWithRetry, type RetryPolicy, type sleep } from "../../providers/retry.js";
+import type { AssistantMessage, FinishReason, Message, ModelProvider, ModelRequest, TokenUsage, ToolCall } from "../../providers/types.js";
+import { estimateCost, type UsageTracker } from "../../telemetry/cost.js";
+import { log } from "../../telemetry/logger.js";
+import type { FileStateTracker } from "../../tools/file-state.js";
+import type { ToolRegistry } from "../../tools/registry.js";
+import { ToolFailure, fail, type Tool, type ToolContext, type ToolResult } from "../../tools/types.js";
+import { oneLine, truncateMiddle } from "../../utils/text.js";
+import type { AgentEvent, AgentListener, AgentStatus, ApprovalRequest, TerminalStatus, TurnResult } from "../events/types.js";
+import type { PlanStore } from "../planning/plan.js";
+import { LoopDetector } from "./loop-detector.js";
+import type { TestCounts } from "../../tools/shell/test-counts.js";
+
+export interface RuntimeDeps {
+  provider: ModelProvider;
+  tools: ToolRegistry;
+  permissions: PermissionEngine;
+  context: ContextManager;
+  store: SessionStore | null;
+  sessionId: string;
+  workspace: Workspace;
+  fileState: FileStateTracker;
+  plan: PlanStore;
+  redactor: SecretRedactor;
+  usage: UsageTracker;
+  config: SutraConfig;
+  /** Asks the user. Non-interactive front-ends should resolve "deny". */
+  approve: (req: ApprovalRequest) => Promise<ApprovalChoice>;
+  systemPrompt: () => string;
+  toolLogDir: string;
+  retryPolicy?: RetryPolicy;
+  sleepFn?: typeof sleep;
+  /** Default timeout for tools without their own policy. */
+  defaultToolTimeoutMs?: number;
+}
+
+interface PreparedCall {
+  call: ToolCall;
+  tool?: Tool<any>;
+  args?: unknown;
+  /** Set when the call is resolved without executing (invalid, denied, ...). */
+  result?: ToolResult;
+  outcome?: "error" | "denied" | "cancelled";
+  deniedBy?: "user" | "policy";
+  summary: string;
+}
+
+interface TurnState {
+  iterations: number;
+  toolCalls: number;
+  filesChanged: Set<string>;
+  tests: TurnResult["testsRun"];
+  finalText: string;
+  costAtStart: number;
+  inputAtStart: number;
+  outputAtStart: number;
+  cachedAtStart: number;
+  startedAt: number;
+  lengthContinuations: number;
+}
+
+const MAX_STREAM_RESETS = 2;
+
+/**
+ * The agent loop: context → inference → validation → permission → execution
+ * → observation → (repeat) → terminal state.
+ *
+ * Invariants:
+ *  - Every tool call id in an assistant message receives exactly one tool
+ *    result message, including failures, denials and cancellations.
+ *  - A turn always ends in an explicit terminal status.
+ *  - Partial streamed output is never persisted as if it were complete.
+ */
+export class AgentRuntime {
+  private listeners = new Set<AgentListener>();
+  private _status: AgentStatus = "idle";
+  private turn = 0;
+  private running = false;
+  private loop = new LoopDetector();
+  private budgetWarned = false;
+  private sessionFiles = new Set<string>();
+  private sessionCommands: { command: string; exitCode: number | null }[] = [];
+  private recentErrors: string[] = [];
+  model: string;
+
+  constructor(private readonly d: RuntimeDeps) {
+    this.model = d.config.model!;
+    d.plan.subscribe((plan) => {
+      d.store?.savePlan(d.sessionId, plan);
+      this.emit({ type: "plan", plan });
+    });
+  }
+
+  get status(): AgentStatus {
+    return this._status;
+  }
+  get sessionId(): string {
+    return this.d.sessionId;
+  }
+  get isRunning(): boolean {
+    return this.running;
+  }
+
+  on(l: AgentListener): () => void {
+    this.listeners.add(l);
+    return () => this.listeners.delete(l);
+  }
+
+  private emit(e: AgentEvent): void {
+    for (const l of this.listeners) {
+      try {
+        l(e);
+      } catch (err) {
+        log().error({ err }, "listener failed");
+      }
+    }
+  }
+
+  private setStatus(s: AgentStatus): void {
+    if (this._status === s) return;
+    this._status = s;
+    this.emit({ type: "status", status: s });
+  }
+
+  /** Estimated prompt tokens of the next request (system prompt + history + tools). */
+  contextTokens(): number {
+    return this.d.context.estimate(this.d.systemPrompt(), this.d.tools.definitions());
+  }
+
+  setModel(model: string): void {
+    this.model = model;
+    this.d.store?.updateSession(this.d.sessionId, { model });
+  }
+
+  private append(message: Message): void {
+    const seq = this.d.store?.appendMessage(this.d.sessionId, message);
+    this.d.context.append(message, seq);
+  }
+
+  // ------------------------------------------------------------------ turn
+
+  async runTurn(input: string, signal?: AbortSignal): Promise<TurnResult> {
+    if (this.running) throw new Error("A turn is already running");
+    this.running = true;
+    this.turn++;
+    const ac = new AbortController();
+    const onAbort = () => ac.abort();
+    if (signal?.aborted) ac.abort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+
+    const totals = this.d.usage.totals;
+    const st: TurnState = {
+      iterations: 0,
+      toolCalls: 0,
+      filesChanged: new Set(),
+      tests: [],
+      finalText: "",
+      costAtStart: totals.costUsd,
+      inputAtStart: totals.inputTokens,
+      outputAtStart: totals.outputTokens,
+      cachedAtStart: totals.cachedInputTokens,
+      startedAt: Date.now(),
+      lengthContinuations: 0,
+    };
+    this.loop.reset();
+    this.emit({ type: "turn_start", turn: this.turn, input });
+
+    try {
+      const over = this.budgetExceeded();
+      if (over) return this.finish(st, "budget_exceeded", over);
+      if (this.d.store && this.turn === 1 && !this.d.store.getSession(this.d.sessionId)?.title)
+        this.d.store.updateSession(this.d.sessionId, { title: oneLine(input, 80) });
+      this.append({ role: "user", content: input });
+      this.d.store?.updateSession(this.d.sessionId, { status: "running" });
+      return await this.loopTurn(st, ac.signal);
+    } catch (err) {
+      this.resolveDangling(ac.signal.aborted ? "cancelled" : "error");
+      if (ac.signal.aborted || (err instanceof ProviderError && err.kind === "cancelled")) return this.finish(st, "cancelled", "Cancelled by user");
+      const msg = err instanceof Error ? err.message : String(err);
+      log().error({ err: msg }, "turn failed");
+      return this.finish(st, "failed", msg);
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+      this.running = false;
+    }
+  }
+
+  private budgetExceeded(): string | null {
+    const limit = this.d.config.budget.maxSessionCostUsd;
+    if (limit !== undefined && this.d.usage.totals.costUsd >= limit)
+      return `Session spend $${this.d.usage.totals.costUsd.toFixed(4)} reached the budget of $${limit.toFixed(2)}. Inference is paused; raise the limit with /budget <usd> to continue.`;
+    return null;
+  }
+
+  private async loopTurn(st: TurnState, signal: AbortSignal): Promise<TurnResult> {
+    const { budget } = this.d.config;
+    while (true) {
+      if (signal.aborted) return this.finish(st, "cancelled", "Cancelled by user");
+      if (st.iterations >= budget.maxIterationsPerTurn)
+        return this.finish(st, "budget_exceeded", `Stopped after ${st.iterations} model iterations (limit budget.maxIterationsPerTurn). Say "continue" to proceed.`);
+      const over = this.budgetExceeded();
+      if (over) return this.finish(st, "budget_exceeded", over);
+
+      const tools = this.d.tools.definitions();
+      let system = this.d.systemPrompt();
+      if (this.d.context.shouldCompact(system, tools)) {
+        await this.compact(false, signal);
+        system = this.d.systemPrompt();
+      }
+
+      st.iterations++;
+      this.setStatus("thinking");
+      const messages = this.d.context.build(system);
+      const estimate = this.d.context.estimator.estimateMessages(messages, tools);
+      this.emit({ type: "inference_start", iteration: st.iterations, estimatedInputTokens: estimate });
+
+      const info = this.d.provider.getModelInfo(this.model);
+      const thinking = info.supportsThinking ? this.d.config.thinking : undefined;
+      const request: ModelRequest = {
+        model: this.model,
+        messages,
+        tools,
+        maxOutputTokens: Math.min(this.d.config.maxOutputTokens ?? info.defaultOutputTokens, info.maxOutputTokens),
+        ...(thinking ? { thinking } : {}),
+        ...(thinking === "enabled" ? { reasoningEffort: this.d.config.reasoningEffort } : {}),
+      };
+
+      const started = performance.now();
+      const res = await this.infer(request, signal);
+      const latency = performance.now() - started;
+      this.recordUsage(res.model, res.usage, latency, estimate);
+
+      const message = this.normalizeCalls(res.message);
+      this.append(message);
+      st.finalText = message.content;
+      this.emit({
+        type: "assistant_message",
+        content: message.content,
+        toolCalls: (message.toolCalls ?? []).map((c) => ({ id: c.id, name: c.name })),
+        finishReason: res.finishReason,
+      });
+
+      if (!message.toolCalls?.length) {
+        if (res.finishReason === "length" && st.lengthContinuations < 1) {
+          st.lengthContinuations++;
+          this.emit({ type: "notice", level: "warn", message: "Response hit the output token limit; asking the model to continue." });
+          this.append({ role: "user", content: "[Sutra: your previous response was cut off by the output token limit. Continue exactly where you stopped.]" });
+          continue;
+        }
+        if (res.finishReason === "content_filter") return this.finish(st, "failed", "The provider stopped the response (content filter).");
+        if (res.finishReason === "insufficient_resources") return this.finish(st, "failed", "The provider reported insufficient system resources. Try again shortly.");
+        if (res.finishReason === "length") return this.finish(st, "failed", "The response was truncated by the output token limit.");
+        return this.finish(st, "completed");
+      }
+
+      this.setStatus("executing");
+      await this.executeToolCalls(message.toolCalls, st, signal);
+      this.d.store?.saveCheckpoint(this.d.sessionId, {
+        status: "executing",
+        turn: this.turn,
+        iteration: st.iterations,
+        fileState: this.d.fileState.toJSON(),
+      });
+      if (signal.aborted) return this.finish(st, "cancelled", "Cancelled by user");
+      if (this.loop.exhausted) return this.finish(st, "failed", "Stopped: the model kept repeating identical tool calls without progress.");
+      if (st.toolCalls >= budget.maxToolCallsPerTurn)
+        return this.finish(st, "budget_exceeded", `Stopped after ${st.toolCalls} tool calls (limit budget.maxToolCallsPerTurn). Say "continue" to proceed.`);
+    }
+  }
+
+  private async infer(request: ModelRequest, signal: AbortSignal): Promise<{ message: AssistantMessage; finishReason: FinishReason; usage: TokenUsage | null; model: string }> {
+    for (let resets = 0; ; resets++) {
+      try {
+        for await (const ev of generateWithRetry(this.d.provider, request, {
+          signal,
+          ...(this.d.retryPolicy ? { policy: this.d.retryPolicy } : {}),
+          ...(this.d.sleepFn ? { sleepFn: this.d.sleepFn } : {}),
+          onRetry: (n) => this.emit({ type: "inference_retry", attempt: n.attempt, delayMs: n.delayMs, reason: n.error.message }),
+        })) {
+          switch (ev.type) {
+            case "text_delta":
+              this.emit({ type: "text_delta", text: ev.text });
+              break;
+            case "reasoning_delta":
+              this.emit({ type: "reasoning_progress", chars: ev.chars });
+              break;
+            case "tool_call_start":
+              this.emit({ type: "tool_call_streaming", name: ev.name });
+              break;
+            case "message_complete":
+              return { message: ev.message, finishReason: ev.finishReason, usage: ev.usage, model: ev.model };
+          }
+        }
+        throw new ProviderError("protocol", "Stream ended without a complete message");
+      } catch (err) {
+        if (err instanceof ProviderError && err.partial && err.retryable && resets < MAX_STREAM_RESETS && !signal.aborted) {
+          this.emit({ type: "stream_reset", reason: err.message });
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  /** Ensure every tool call has a unique, non-empty id before it is persisted. */
+  private normalizeCalls(m: AssistantMessage): AssistantMessage {
+    if (!m.toolCalls) return m;
+    const seen = new Set<string>();
+    m.toolCalls = m.toolCalls.map((c, i) => {
+      let id = c.id || `call_${this.turn}_${i}`;
+      while (seen.has(id)) id = `${id}_${i}`;
+      seen.add(id);
+      return { ...c, id };
+    });
+    return m;
+  }
+
+  private recordUsage(model: string, usage: TokenUsage | null, latencyMs: number, estimate: number): void {
+    const price = this.d.config.pricing[model] ?? this.d.config.pricing[this.model];
+    const cost = usage ? estimateCost(usage, price) : null;
+    this.d.usage.recordRequest(usage, latencyMs, cost);
+    this.d.store?.recordUsage(this.d.sessionId, model, usage, latencyMs, cost);
+    if (usage) this.d.context.estimator.calibrate(estimate, usage.inputTokens);
+    this.emit({ type: "usage", usage, costUsd: cost, latencyMs, totals: { ...this.d.usage.totals } });
+    const limit = this.d.config.budget.maxSessionCostUsd;
+    if (limit && !this.budgetWarned && this.d.usage.totals.costUsd >= limit * this.d.config.budget.warnAtFraction) {
+      this.budgetWarned = true;
+      this.emit({ type: "budget_warning", spentUsd: this.d.usage.totals.costUsd, limitUsd: limit });
+    }
+  }
+
+  // ----------------------------------------------------------------- tools
+
+  private prepare(call: ToolCall): PreparedCall {
+    const tool = this.d.tools.get(call.name);
+    if (!tool) {
+      return { call, summary: call.name, outcome: "error", result: fail("unknown_tool", `Unknown tool "${call.name}". Available: ${this.d.tools.list().map((t) => t.name).join(", ")}`) };
+    }
+    let raw: unknown;
+    try {
+      raw = call.arguments.trim() ? JSON.parse(call.arguments) : {};
+    } catch {
+      return { call, tool, summary: call.name, outcome: "error", result: fail("invalid_arguments", `Arguments are not valid JSON (possibly truncated): ${truncateMiddle(call.arguments, 300).text}`) };
+    }
+    const parsed = tool.schema.safeParse(raw);
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
+      return { call, tool, summary: call.name, outcome: "error", result: fail("invalid_arguments", `Invalid arguments for ${call.name}: ${issues}`) };
+    }
+    return { call, tool, args: parsed.data, summary: call.name };
+  }
+
+  private toolContext(callId: string, signal: AbortSignal): ToolContext {
+    const t = this.d.config.tools;
+    return {
+      workspace: this.d.workspace,
+      fileState: this.d.fileState,
+      plan: this.d.plan,
+      redactor: this.d.redactor,
+      signal,
+      sessionId: this.d.sessionId,
+      toolCallId: callId,
+      settings: {
+        commandTimeoutMs: t.commandTimeoutMs,
+        maxOutputChars: t.maxOutputChars,
+        retainFullLogs: t.retainFullLogs,
+        scrubEnv: t.scrubEnv,
+        logDir: this.d.toolLogDir,
+        ...(t.testCommand ? { testCommand: t.testCommand } : {}),
+      },
+      onProgress: (chunk) => this.emit({ type: "tool_progress", toolCallId: callId, chunk: this.d.redactor.redact(chunk) }),
+    };
+  }
+
+  /** Permission phase for one call. Runs sequentially so prompts never overlap. */
+  private async authorize(p: PreparedCall, signal: AbortSignal): Promise<void> {
+    if (p.result) return;
+    const tool = p.tool!;
+    if (this.loop.check(p.call.name, p.args)) {
+      p.outcome = "error";
+      p.result = fail("loop_detected", "This exact call was already made several times with no change in between. Use the earlier result or try a different approach.");
+      return;
+    }
+    const ctx = this.toolContext(p.call.id, signal);
+    let req;
+    try {
+      req = tool.describe(p.args, ctx);
+    } catch (err) {
+      p.outcome = "error";
+      p.result = fail(err instanceof PathViolation ? "path_violation" : "invalid_arguments", (err as Error).message);
+      return;
+    }
+    p.summary = req.summary;
+    const decision = this.d.permissions.evaluate(req);
+    if (decision.verdict === "deny") {
+      p.outcome = "denied";
+      p.deniedBy = "policy";
+      p.result = fail("permission_denied", `Blocked by permission policy (${this.d.permissions.policy.profile} profile): ${decision.reason}. Do not retry this action with another tool.`);
+      return;
+    }
+    if (decision.verdict === "allow") return;
+
+    let preview;
+    if (tool.preview) {
+      try {
+        preview = await tool.preview(p.args, ctx);
+      } catch (err) {
+        // A failing preview (e.g. edit target not found) is the call's result;
+        // there's nothing meaningful to approve.
+        p.outcome = "error";
+        p.result = err instanceof ToolFailure ? fail(err.code, err.message, { retryable: err.retryable }) : fail("execution_failed", (err as Error).message);
+        return;
+      }
+    }
+    if (signal.aborted) return;
+    this.setStatus("awaiting_approval");
+    const choice = await this.d.approve({ toolCallId: p.call.id, tool: tool.name, summary: req.summary, decision, ...(preview ? { preview } : {}) });
+    this.setStatus("executing");
+    if (choice === "deny") {
+      p.outcome = "denied";
+      p.deniedBy = "user";
+      p.result = fail("user_rejected", "The user declined this action. Ask how they would like to proceed or choose a different approach.");
+    } else if (choice === "session" && decision.grantKey) {
+      this.d.permissions.grant(decision.grantKey);
+    }
+  }
+
+  private async run(p: PreparedCall, st: TurnState, signal: AbortSignal): Promise<void> {
+    const tool = p.tool!;
+    const started = new Date();
+    this.emit({ type: "tool_start", toolCallId: p.call.id, name: tool.name, summary: p.summary, args: p.args });
+    const callAc = new AbortController();
+    const onAbort = () => callAc.abort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    const timeoutMs = tool.timeoutMs ?? (tool.category === "execute" ? 31 * 60_000 : (this.d.defaultToolTimeoutMs ?? 5 * 60_000));
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeout = new Promise<ToolResult>((resolve) => {
+        timer = setTimeout(() => {
+          callAc.abort();
+          resolve(fail("timeout", `${tool.name} exceeded its ${timeoutMs} ms timeout`));
+        }, timeoutMs);
+      });
+      const result = await Promise.race([tool.execute(p.args, this.toolContext(p.call.id, callAc.signal)), timeout]);
+      p.result = result;
+      if (!result.ok) p.outcome = result.error?.code === "cancelled" ? "cancelled" : "error";
+    } catch (err) {
+      p.outcome = signal.aborted ? "cancelled" : "error";
+      p.result =
+        err instanceof ToolFailure
+          ? fail(err.code, err.message, { retryable: err.retryable })
+          : err instanceof PathViolation
+            ? fail("path_violation", err.message)
+            : signal.aborted
+              ? fail("cancelled", "Cancelled by user")
+              : fail("internal_error", `${tool.name} crashed: ${(err as Error).message}`);
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
+    const durationMs = Date.now() - started.getTime();
+    this.d.usage.recordTool(durationMs);
+    this.afterTool(p, st);
+    this.emit({ type: "tool_end", toolCallId: p.call.id, name: tool.name, summary: p.summary, args: p.args, result: p.result!, durationMs, outcome: p.outcome ?? "ok" });
+    this.persistInvocation(p, started, durationMs);
+  }
+
+  private afterTool(p: PreparedCall, st: TurnState): void {
+    const r = p.result!;
+    const tool = p.tool!;
+    if (r.ok && !tool.readOnly && tool.category !== "internal") this.loop.advanceEpoch();
+    const files = r.ok ? (r.data?.files as string[] | undefined) : undefined;
+    for (const f of files ?? []) {
+      st.filesChanged.add(f);
+      this.sessionFiles.add(f);
+    }
+    if (tool.category === "execute" && r.data && "command" in r.data) {
+      this.sessionCommands.push({ command: String(r.data.command), exitCode: (r.data.exitCode as number | null) ?? null });
+      if (tool.name === "run_tests")
+        st.tests.push({ command: String(r.data.command), passed: r.data.exitCode === 0, ...(r.data.counts ? { counts: r.data.counts as TestCounts } : {}) });
+    }
+    if (!r.ok) this.recentErrors = [...this.recentErrors.slice(-9), `${tool.name}: ${r.error?.message ?? r.output}`];
+  }
+
+  private persistInvocation(p: PreparedCall, started: Date, durationMs: number): void {
+    const r = p.result!;
+    this.d.store?.recordToolInvocation({
+      sessionId: this.d.sessionId,
+      toolCallId: p.call.id,
+      name: p.call.name,
+      arguments: p.call.arguments,
+      status: p.outcome ?? "ok",
+      output: this.d.redactor.redact(r.output),
+      ...(r.data ? { data: r.data } : {}),
+      startedAt: started.toISOString(),
+      endedAt: new Date(started.getTime() + durationMs).toISOString(),
+      durationMs,
+    });
+  }
+
+  private async executeToolCalls(calls: ToolCall[], st: TurnState, signal: AbortSignal): Promise<void> {
+    const prepared = calls.map((c) => this.prepare(c));
+    st.toolCalls += calls.length;
+
+    // Consecutive read-only calls form a parallel batch; anything that writes
+    // or executes runs alone, in the order the model issued it.
+    const batches: PreparedCall[][] = [];
+    for (const p of prepared) {
+      const last = batches[batches.length - 1];
+      const parallel = p.tool?.readOnly && !p.result;
+      if (parallel && last && last.every((x) => x.tool?.readOnly && !x.result)) last.push(p);
+      else batches.push([p]);
+    }
+
+    for (const batch of batches) {
+      for (const p of batch) {
+        if (signal.aborted) break;
+        await this.authorize(p, signal);
+      }
+      const runnable = batch.filter((p) => !p.result && !signal.aborted);
+      await Promise.all(runnable.map((p) => this.run(p, st, signal)));
+      for (const p of batch) {
+        if (!p.result) {
+          p.outcome = "cancelled";
+          p.result = fail("cancelled", "Not executed: the user cancelled the turn.");
+        }
+        if (!runnable.includes(p)) {
+          // Resolved without running: still report it to the UI and the log.
+          this.emit({
+            type: "tool_end",
+            toolCallId: p.call.id,
+            name: p.call.name,
+            summary: p.summary,
+            args: p.args,
+            result: p.result,
+            durationMs: 0,
+            outcome: p.outcome ?? "error",
+            ...(p.deniedBy ? { deniedBy: p.deniedBy } : {}),
+          });
+          this.persistInvocation(p, new Date(), 0);
+          if (p.tool) this.afterTool(p, st);
+        }
+      }
+    }
+
+    // Exactly one result per call id, in the order the calls were issued.
+    for (const p of prepared) {
+      const r = p.result!;
+      const content = this.d.redactor.redact(truncateMiddle(r.output, this.d.config.tools.maxOutputChars).text);
+      this.append({ role: "tool", toolCallId: p.call.id, name: p.call.name, content });
+    }
+  }
+
+  /** Give any dangling tool calls a result so history stays protocol-valid. */
+  private resolveDangling(reason: "cancelled" | "error"): void {
+    for (const c of this.d.context.unresolvedToolCalls()) {
+      this.append({
+        role: "tool",
+        toolCallId: c.id,
+        name: c.name,
+        content: reason === "cancelled" ? "Error (cancelled): the user cancelled the turn before this tool ran." : "Error (internal_error): the turn failed before this tool ran.",
+      });
+    }
+  }
+
+  // ------------------------------------------------------------ compaction
+
+  async compact(manual: boolean, signal?: AbortSignal): Promise<boolean> {
+    const result = await this.d.context.compact({
+      provider: this.d.provider,
+      model: this.model,
+      systemPrompt: this.d.systemPrompt(),
+      tools: this.d.tools.definitions(),
+      facts: {
+        filesModified: [...this.sessionFiles],
+        commands: this.sessionCommands,
+        unresolvedErrors: this.recentErrors,
+        plan: this.d.plan.get() ? this.d.plan.render() : null,
+      },
+      ...(signal ? { signal } : {}),
+    });
+    if (!result) {
+      if (manual) this.emit({ type: "notice", level: "info", message: "Nothing to compact yet." });
+      return false;
+    }
+    this.d.store?.saveCompaction(this.d.sessionId, { boundarySeq: result.boundarySeq, summary: result.summary, tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter });
+    this.emit({ type: "compaction", tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter, usedModel: result.usedModel, manual });
+    return true;
+  }
+
+  private finish(st: TurnState, status: TerminalStatus, reason?: string): TurnResult {
+    this.setStatus(status);
+    const t = this.d.usage.totals;
+    const result: TurnResult = {
+      status,
+      ...(reason ? { reason } : {}),
+      iterations: st.iterations,
+      toolCalls: st.toolCalls,
+      filesChanged: [...st.filesChanged],
+      finalText: st.finalText,
+      costUsd: t.costUsd - st.costAtStart,
+      inputTokens: t.inputTokens - st.inputAtStart,
+      outputTokens: t.outputTokens - st.outputAtStart,
+      cachedInputTokens: t.cachedInputTokens - st.cachedAtStart,
+      durationMs: Date.now() - st.startedAt,
+      testsRun: st.tests,
+    };
+    this.d.store?.updateSession(this.d.sessionId, { status });
+    this.d.store?.saveCheckpoint(this.d.sessionId, { status, turn: this.turn, iteration: st.iterations, fileState: this.d.fileState.toJSON(), ...(reason ? { note: reason } : {}) });
+    this.emit({ type: "turn_end", result });
+    this._status = "idle";
+    return result;
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "name": "sutra-agent",
+  "version": "0.1.0",
+  "description": "Sutra (सूत्र) — an open-source, model-independent AI coding agent harness. The thread that connects intelligence to action.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "sutra": "dist/index.js"
+  },
+  "main": "dist/lib.js",
+  "types": "dist/lib.d.ts",
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:smoke": "SUTRA_SMOKE=1 vitest run tests/smoke"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "cli",
+    "deepseek",
+    "llm",
+    "terminal"
+  ],
+  "dependencies": {
+    "chalk": "^6.0.1",
+    "diff": "^9.0.0",
+    "highlight.js": "^11.12.0",
+    "ignore": "^7.0.14",
+    "ink": "^8.0.0",
+    "pino": "^10.4.0",
+    "react": "^19.3.1",
+    "string-width": "^8.3.0",
+    "tinyglobby": "^0.2.17",
+    "wrap-ansi": "^10.0.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

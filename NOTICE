@@ -1,0 +1,22 @@
+Sutra (सूत्र)
+Copyright 2026 The Sutra Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party software
+--------------------
+Sutra depends on, but does not vendor, the following open-source packages,
+installed via npm under their own licenses:
+  ink (MIT), react (MIT), zod (MIT), highlight.js (BSD-3-Clause),
+  diff/jsdiff (BSD-3-Clause), tinyglobby (MIT), ignore (MIT), pino (MIT),
+  chalk (MIT), string-width (MIT), wrap-ansi (MIT).
+
+Fonts
+-----
+No fonts are bundled. Brand SVGs reference, by family name only:
+  JetBrains Mono — SIL Open Font License 1.1
+  Noto Sans Devanagari — SIL Open Font License 1.1
+
+DeepSeek is a trademark of its respective owner. Sutra is an independent
+project and is not affiliated with or endorsed by DeepSeek or any other
+model provider.

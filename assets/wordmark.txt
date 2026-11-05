@@ -1,0 +1,13 @@
+Sutra terminal identity (UTF-8 box drawing; fits in 48 columns)
+
+  ━━━┯━━━   सूत्र
+     ╰─╮    S U T R A
+     ╭─╯
+     ●      Intelligence, connected to action.
+
+ASCII-only fallback (terminals without UTF-8):
+
+  ---+---   SUTRA
+     \_.
+     ._/
+     o      Intelligence, connected to action.
