@@ -101,6 +101,8 @@ export interface Verification {
   bounces: number;
   /** Cost of the harness's own model calls and sub-agents this turn. */
   auxCostUsd: number;
+  /** Economy experiment: which model checks were skipped because deterministic checks settled the criteria. */
+  economy?: { skipped: string[]; reason: string };
 }
 
 export interface QualityLimits {

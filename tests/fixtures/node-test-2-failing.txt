@@ -1,0 +1,56 @@
+✖ a session that expires in an hour is not expired (1.156416ms)
+✔ a session that expired a minute ago is expired (0.124542ms)
+✔ secondsRemaining counts down (0.07975ms)
+✖ ensureFresh only refreshes expired sessions (0.798208ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 113.259417
+
+✖ failing tests:
+
+test at test/session.test.js:8:1
+✖ a session that expires in an hour is not expired (1.156416ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (file:///repo/test/session.test.js:9:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/session.test.js:20:1
+✖ ensureFresh only refreshes expired sessions (0.798208ms)
+  AssertionError [ERR_ASSERTION]: Expected "actual" to be reference-equal to "expected":
+  + actual - expected
+  
+    {
+  +   expiresAt: 1767272400,
+  +   refreshToken: 'r2'
+  -   expiresAt: 1767269400,
+  -   refreshToken: 'r1'
+    }
+  
+      at TestContext.<anonymous> (file:///repo/test/session.test.js:27:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { expiresAt: 1767272400, refreshToken: 'r2' },
+    expected: { expiresAt: 1767269400, refreshToken: 'r1' },
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -17,6 +17,10 @@ export interface CliArgs {
   /** --no-index: skip the repository index (map, find_symbol, code_search). */
   index: boolean;
   quality?: "fast" | "balanced" | "deep";
+  /** --map: when to add a repository map to requests. */
+  map?: "auto" | "always" | "never";
+  /** --economy: skip contract/review/judge when deterministic checks settle the criteria (experiment). */
+  economy?: boolean;
   debug: boolean;
   color: boolean;
   print: boolean;
@@ -56,6 +60,8 @@ Options
   --sandbox <auto|required|off>  OS sandbox for commands (default: auto)
   --no-index                     Skip the repository index (map, find_symbol, code_search)
   --quality <fast|balanced|deep> How much verification to spend per turn (default: balanced)
+  --map <auto|always|never>      When to add a repository map to a request (default: auto)
+  --economy                      Experiment: skip model checks when test results settle the criteria
   --no-thinking                  Disable the model's thinking mode
   -p, --print                    Non-interactive: print the answer to stdout, activity to stderr
   --json                         With --print: emit runtime events as JSON lines
@@ -96,6 +102,8 @@ export function parseCli(argv: string[]): CliArgs {
       sandbox: { type: "string" },
       "no-index": { type: "boolean", default: false },
       quality: { type: "string" },
+      map: { type: "string" },
+      economy: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       "no-color": { type: "boolean", default: false },
       print: { type: "boolean", short: "p", default: false },
@@ -119,6 +127,7 @@ export function parseCli(argv: string[]): CliArgs {
   if (values.sandbox && !["auto", "required", "off"].includes(values.sandbox)) throw new Error(`--sandbox must be auto, required or off`);
   if (values.format && !["md", "json"].includes(values.format)) throw new Error(`--format must be md or json`);
   if (values.quality && !["fast", "balanced", "deep"].includes(values.quality)) throw new Error(`--quality must be fast, balanced or deep`);
+  if (values.map && !["auto", "always", "never"].includes(values.map)) throw new Error(`--map must be auto, always or never`);
   if (values.readonly && values.profile && values.profile !== "inspect") throw new Error("--readonly conflicts with --profile " + values.profile);
   const maxCost = values["max-cost"] !== undefined ? Number(values["max-cost"]) : undefined;
   if (maxCost !== undefined && !(maxCost > 0)) throw new Error("--max-cost must be a positive number of USD");
@@ -151,6 +160,8 @@ export function parseCli(argv: string[]): CliArgs {
     ...(values.sandbox ? { sandbox: values.sandbox as CliArgs["sandbox"] } : {}),
     index: !values["no-index"],
     ...(values.quality ? { quality: values.quality as CliArgs["quality"] } : {}),
+    ...(values.map ? { map: values.map as CliArgs["map"] } : {}),
+    ...(values.economy ? { economy: true } : {}),
     debug: values.debug,
     color: !values["no-color"],
     print: values.print,

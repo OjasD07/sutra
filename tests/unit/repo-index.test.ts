@@ -11,7 +11,7 @@ import { SecretRedactor } from "../../src/permissions/sensitive.js";
 import { FileStateTracker } from "../../src/tools/file-state.js";
 import { createDefaultRegistry } from "../../src/tools/registry.js";
 import type { ToolContext } from "../../src/tools/types.js";
-import { createHarness, tempDir, writeFiles, type Harness } from "../helpers/harness.js";
+import { createHarness, tempDir, testConfig, writeFiles, type Harness } from "../helpers/harness.js";
 import { ScriptedProvider } from "../helpers/scripted-provider.js";
 
 const names = (src: string, lang: Parameters<typeof extractSymbols>[1]) => extractSymbols(src, lang).map((s) => `${s.kind}:${s.parent ? s.parent + "." : ""}${s.name}@${s.line}`);
@@ -264,13 +264,15 @@ describe("session integration", () => {
   let h: Harness | undefined;
   afterEach(() => h?.cleanup());
 
-  it("puts the map in the system prompt once and sees edits through the tools", async () => {
+  it("with mapMode always, puts the map in the system prompt once and sees edits through the tools", async () => {
     const provider = new ScriptedProvider([
       { toolCalls: [{ name: "write_file", args: { path: "src/newmod.ts", content: "export function computeInvoiceTotal() { return 1; }\n" } }] },
       { toolCalls: [{ name: "find_symbol", args: { name: "computeInvoiceTotal" } }] },
       { content: "done" },
     ]);
-    h = createHarness({ provider, files: { "src/session.ts": "export function isExpired(): boolean { return true; }\n" }, approve: () => "once" });
+    const config = testConfig();
+    config.index.mapMode = "always";
+    h = createHarness({ provider, config, files: { "src/session.ts": "export function isExpired(): boolean { return true; }\n" }, approve: () => "once" });
     await h.session.runtime.runTurn("add a function");
     const system = provider.requests[0]!.messages[0]!.content as string;
     expect(system).toContain("# Repository map");

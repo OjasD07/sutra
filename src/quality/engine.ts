@@ -91,6 +91,10 @@ export class TurnQuality {
   private stallNoted = false;
   private packet: string | null = null;
   private auxCost = 0;
+  /** Economy experiment: criteria come from a failing baseline, not a model call. */
+  private economyCriteria = false;
+  private skipped: string[] = [];
+  private economyReason = "";
 
   constructor(
     private readonly d: QualityDeps,
@@ -138,7 +142,9 @@ export class TurnQuality {
   /** Before the first inference: contract, baseline, evidence packet. Returns text appended to the request. */
   async begin(signal?: AbortSignal): Promise<string | null> {
     this.kind = BUG_WORDS.test(this.request) ? "bugfix" : "other";
-    if (this.limits.contract && !this.planOnly) await this.extractContract(signal);
+    const economy = this.d.config.quality.economy && this.mode !== "fast";
+    // Economy runs the baseline first: a failing baseline can replace the contract call.
+    if (this.limits.contract && !this.planOnly && !economy) await this.extractContract(signal);
 
     let baselineNote: string | undefined;
     if (this.limits.packet && !this.planOnly && this.kind === "bugfix" && this.d.testCommand) {
@@ -150,9 +156,21 @@ export class TurnQuality {
         const failing = failureSignature(out)?.split("|").filter((x) => !x.startsWith("failed:")) ?? [];
         const b = this.addCheck({ kind: "baseline", summary: `${this.d.testCommand} before any edit`, command: this.d.testCommand, exitCode: r.exitCode, ...(counts ? { counts } : {}), ...(failing.length ? { failing } : {}), passed: r.exitCode === 0 });
         this.d.emit({ type: "quality", stage: "baseline", level: "info", message: `baseline \`${this.d.testCommand}\` → exit ${r.exitCode}${counts ? ` (${counts.failed} of ${counts.total} failing)` : ""}` });
-        void b;
+        if (economy && !b.passed && failing.length) {
+          // Deterministic acceptance criteria for a bug with named failing tests.
+          this.economyCriteria = true;
+          this.skipped.push("contract");
+          this.criteria = [
+            { id: "C1", text: `The previously failing tests pass: ${failing.slice(0, 5).map((n) => `"${n}"`).join(", ")}`, exec: true },
+            { id: "C2", text: "The full test suite passes after the final edit (nothing else regresses)", exec: true },
+            { id: "C3", text: "No test files are modified", exec: false },
+          ];
+          this.d.emit({ type: "quality", stage: "contract", level: "info", message: `economy: criteria from the failing baseline (${failing.length} named failure(s)); contract call skipped` });
+        }
       } else baselineNote = `not run automatically (running \`${this.d.testCommand}\` needs your approval in this profile); run_tests will establish it`;
     }
+
+    if (economy && !this.economyCriteria && this.limits.contract && !this.planOnly) await this.extractContract(signal);
 
     if (this.limits.candidates > 0 && !this.planOnly) {
       try {
@@ -205,7 +223,7 @@ export class TurnQuality {
     }
     if (t.category === "execute" && "exitCode" in data && "command" in data) {
       const command = String(data.command);
-      const isTest = t.name === "run_tests" || CHECK_COMMAND.test(command);
+      const isTest = t.name === "run_tests" || t.name === "diagnose_failure" || CHECK_COMMAND.test(command);
       const exitCode = (data.exitCode as number | null) ?? null;
       const counts = data.counts as TestCounts | undefined;
       const failing = data.failing as string[] | undefined;
@@ -274,9 +292,17 @@ export class TurnQuality {
         this.addCheck({ kind: "diff", summary: `harness record: changed ${files.join(", ")}; ${tests.length ? `test files changed: ${tests.join(", ")}` : "no test files changed"}`, passed: tests.length === 0 });
     }
 
+    // Economy: if fresh deterministic checks settle every criterion, the model checks can't add evidence.
+    let settled = this.economySettle();
+    if (settled) {
+      for (const s of ["review", "judge"]) if (!this.skipped.includes(s)) this.skipped.push(s);
+      this.economyReason = "a fresh full-suite run passes, including the previously failing tests, and no test file changed";
+      this.d.emit({ type: "quality", stage: "gate", level: "info", message: "economy: deterministic checks settle every criterion; review and judge skipped" });
+    }
+
     // 1. Independent alignment review of the current patch.
     const tree = changed ? treeHash(this.d.workspaceRoot, [...this.filesChanged]) : null;
-    if (changed && this.limits.review && tree !== this.reviewedTree && !this.aux.exhausted) {
+    if (!settled && changed && this.limits.review && tree !== this.reviewedTree && !this.aux.exhausted) {
       this.d.emit({ type: "quality", stage: "review", level: "info", message: "independent review: inferring what the patch does without the request" });
       this.review = await reviewAlignment(this.aux, { request: this.request, diff: this.diffs.join("\n"), checks: this.checks.map((c) => `- ${c.summary}`).join("\n"), ...(signal ? { signal } : {}) });
       this.reviewedTree = tree;
@@ -285,7 +311,7 @@ export class TurnQuality {
     }
 
     // 2. Judge each criterion against fresh evidence.
-    let criteria = await this.judge(finalText, signal);
+    let criteria = settled ?? (await this.judge(finalText, signal));
 
     // 3. Counterexamples. Balanced hunts only when a criterion still lacks evidence
     //    (a well-covered fix stays cheap); deep always hunts. Banked ones are re-checked.
@@ -322,7 +348,10 @@ export class TurnQuality {
         return { action: "continue", message: this.counterexampleMessage(failingCx) };
       }
       // New probe results can change the verdict: judge again with them.
-      if (this.bank.length && !hadCx) criteria = await this.judge(finalText, signal);
+      if (this.bank.length && !hadCx) {
+        settled = this.economySettle();
+        criteria = settled ?? (await this.judge(finalText, signal));
+      }
     }
     const gaps = criteria.filter((c) => c.status !== "passed");
 
@@ -379,6 +408,31 @@ export class TurnQuality {
     const v = this.verification(this.deterministicCriteria());
     this.dispose();
     return v;
+  }
+
+  /**
+   * Economy experiment. Returns criteria settled by deterministic checks
+   * alone, or null when a model judgement is still needed: the criteria came
+   * from a failing baseline, the latest full-suite run is fresh and passes
+   * (so every previously failing test passes), no test file changed, and no
+   * banked counterexample fails.
+   */
+  private economySettle(): Criterion[] | null {
+    if (!this.economyCriteria || !this.filesChanged.size) return null;
+    const run = [...this.checks].reverse().find((c) => c.kind === "test");
+    if (!run || !this.fresh(run) || !run.passed || run.command !== this.d.testCommand) return null;
+    const diff = [...this.checks].reverse().find((c) => c.kind === "diff" && this.fresh(c));
+    if (!diff || !diff.passed) return null;
+    if (this.bank.some((c) => c.failing)) return null;
+    const baseline = this.checks.find((c) => c.kind === "baseline");
+    const still = (run.failing ?? []).filter((n) => baseline?.failing?.includes(n));
+    if (still.length) return null;
+    const [c1, c2, c3] = this.criteria;
+    return [
+      { id: c1!.id, text: c1!.text, status: "passed", evidence: [run.id], note: `${run.summary}; baseline ${baseline?.id ?? "?"} had them failing` },
+      { id: c2!.id, text: c2!.text, status: "passed", evidence: [run.id] },
+      { id: c3!.id, text: c3!.text, status: "passed", evidence: [diff.id] },
+    ];
   }
 
   dispose(): void {
@@ -472,6 +526,7 @@ export class TurnQuality {
       hypotheses: this.d.ledger.list(),
       bounces: this.bounces,
       auxCostUsd: this.aux.spent,
+      ...(this.skipped.length ? { economy: { skipped: [...this.skipped], reason: this.economyReason || "criteria from the failing baseline" } } : {}),
     };
   }
 

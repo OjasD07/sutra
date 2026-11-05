@@ -27,6 +27,10 @@ import type { HypothesisLedger } from "../../quality/ledger.js";
 import type { Verification } from "../../quality/types.js";
 import type { UsageTotals } from "../../telemetry/cost.js";
 import type { TestCounts } from "../../tools/shell/test-counts.js";
+import type { ContextCompiler } from "../../context/compiler.js";
+import type { MapDecision } from "../../context/focus-map.js";
+import { existsSync, readFileSync } from "node:fs";
+import { sha256 } from "../../utils/text.js";
 
 export interface RuntimeDeps {
   provider: ModelProvider;
@@ -57,6 +61,10 @@ export interface RuntimeDeps {
   sandbox?: SandboxStatus;
   /** Default timeout for tools without their own policy. */
   defaultToolTimeoutMs?: number;
+  /** Decides what each tool result costs in context: deltas, dedupe, full output on demand. */
+  compiler?: ContextCompiler | null;
+  /** Per-request repository map decision (index.mapMode "auto"). */
+  focusMap?: ((input: string, followUp: boolean) => MapDecision) | null;
 }
 
 interface PreparedCall {
@@ -70,6 +78,8 @@ interface PreparedCall {
   /** Approved as a network command: the sandbox lets this one call out. */
   allowNetwork?: boolean;
   summary: string;
+  /** What enters history for this call (compiled once, never rewritten). */
+  content?: string;
 }
 
 interface TurnState {
@@ -86,6 +96,7 @@ interface TurnState {
   lengthContinuations: number;
   quality: TurnQuality | null;
   verification?: Verification | null;
+  contextMap?: { included: boolean; reason: string };
 }
 
 const MAX_STREAM_RESETS = 2;
@@ -200,6 +211,8 @@ export class AgentRuntime {
       quality: this.d.quality?.startTurn(input, (opts.mode ?? "normal") === "plan") ?? null,
     };
     this.loop.reset();
+    // The user may have changed files between turns.
+    this.d.compiler?.advance();
     this.emit({ type: "turn_start", turn: this.turn, input, mode: this.mode });
 
     try {
@@ -216,8 +229,16 @@ export class AgentRuntime {
           this.emit({ type: "notice", level: "warn", message: `Evidence packet unavailable: ${(err as Error).message}` });
         }
       }
+      let map: MapDecision | null = null;
+      try {
+        map = this.d.focusMap?.(input, this.d.context.messages().some((m) => m.role === "user")) ?? null;
+      } catch (err) {
+        log().warn({ err: (err as Error).message }, "focus map failed");
+      }
+      if (map) st.contextMap = { included: !!map.text, reason: map.reason };
+      // Stable prefix first (system prompt, tools, history); this request's evidence goes last.
       const body = this.mode === "plan" ? `${PLAN_MODE_PREFIX}\n\n${input}` : input;
-      this.append({ role: "user", content: evidence ? `${body}\n\n${evidence}` : body });
+      this.append({ role: "user", content: [body, evidence, map?.text].filter(Boolean).join("\n\n") });
       this.d.store?.updateSession(this.d.sessionId, { status: "running" });
       return await this.loopTurn(st, ac.signal);
     } catch (err) {
@@ -320,6 +341,7 @@ export class AgentRuntime {
         fileState: this.d.fileState.toJSON(),
       });
       if (signal.aborted) return this.finish(st, "cancelled", "Cancelled by user");
+      await this.checkpoint(message.toolCalls, st, signal);
       if (this.loop.exhausted) return this.finish(st, "failed", "Stopped: the model kept repeating identical tool calls without progress.");
       if (st.toolCalls >= budget.maxToolCallsPerTurn)
         return this.finish(st, "budget_exceeded", `Stopped after ${st.toolCalls} tool calls (limit budget.maxToolCallsPerTurn). Say "continue" to proceed.`);
@@ -454,6 +476,7 @@ export class AgentRuntime {
       sandbox: this.d.sandbox?.runner ?? null,
       repoIndex: this.d.repoIndex ?? null,
       hypotheses: this.d.ledger ?? null,
+      outputs: (id) => this.d.compiler?.output(id),
       sandboxRequired: this.d.sandbox?.mode === "required",
       allowNetwork,
       onProgress: (chunk) => this.emit({ type: "tool_progress", toolCallId: callId, chunk: this.d.redactor.redact(chunk) }),
@@ -483,6 +506,12 @@ export class AgentRuntime {
       p.outcome = "denied";
       p.deniedBy = "policy";
       p.result = fail("permission_denied", "Plan mode: nothing may be changed or run until the user approves the plan. Record the step in update_plan instead.");
+      return;
+    }
+    // Re-running identical tests with nothing changed would only repeat the last result.
+    const skip = this.d.compiler?.preempt(tool.name, req.command, !!(p.args as { force?: boolean } | undefined)?.force);
+    if (skip) {
+      p.result = skip;
       return;
     }
     const decision = this.d.permissions.evaluate(req);
@@ -561,9 +590,23 @@ export class AgentRuntime {
     this.persistInvocation(p, started, durationMs);
   }
 
+  /** The bounded, redacted text for history; compiled at the moment the result is known. */
+  private contentFor(p: PreparedCall): string {
+    const r = p.result!;
+    const bounded = truncateMiddle(r.output, this.d.config.tools.maxOutputChars);
+    const content = this.d.redactor.redact(bounded.text);
+    // A tool may hand over a fuller text for get_output; it never reaches the log unredacted.
+    const raw = r.data?.rawOutput;
+    if (r.data && "rawOutput" in r.data) delete r.data.rawOutput;
+    const full = typeof raw === "string" ? this.d.redactor.redact(raw) : undefined;
+    if (!this.d.compiler) return content;
+    return this.d.compiler.compile({ callId: p.call.id, name: p.call.name, category: p.tool?.category ?? "internal", result: r, content, truncated: bounded.truncated, ...(full ? { full } : {}) });
+  }
+
   private afterTool(p: PreparedCall, st: TurnState): void {
     const r = p.result!;
     const tool = p.tool!;
+    p.content = this.contentFor(p);
     st.quality?.observe({ name: tool.name, category: tool.category, readOnly: tool.readOnly, outcome: p.outcome ?? "ok", result: r });
     if (r.ok && !tool.readOnly && tool.category !== "internal") {
       this.loop.advanceEpoch();
@@ -576,7 +619,7 @@ export class AgentRuntime {
     }
     if (tool.category === "execute" && r.data && "command" in r.data) {
       this.sessionCommands.push({ command: String(r.data.command), exitCode: (r.data.exitCode as number | null) ?? null });
-      if (tool.name === "run_tests")
+      if (tool.name === "run_tests" || tool.name === "diagnose_failure")
         st.tests.push({ command: String(r.data.command), passed: r.data.exitCode === 0, ...(r.data.counts ? { counts: r.data.counts as TestCounts } : {}) });
     }
     if (!r.ok) this.recentErrors = [...this.recentErrors.slice(-9), `${tool.name}: ${r.error?.message ?? r.output}`];
@@ -647,8 +690,7 @@ export class AgentRuntime {
 
     // Exactly one result per call id, in the order the calls were issued.
     for (const p of prepared) {
-      const r = p.result!;
-      const content = this.d.redactor.redact(truncateMiddle(r.output, this.d.config.tools.maxOutputChars).text);
+      const content = p.content ?? this.contentFor(p);
       this.append({ role: "tool", toolCallId: p.call.id, name: p.call.name, content });
     }
   }
@@ -678,9 +720,11 @@ export class AgentRuntime {
         commands: this.sessionCommands,
         unresolvedErrors: this.recentErrors,
         plan: this.d.plan.get() ? this.d.plan.render() : null,
+        evidence: this.evidenceFacts(),
       },
       ...(signal ? { signal } : {}),
     });
+    if (result) this.d.compiler?.reset();
     if (!result) {
       if (manual) this.emit({ type: "notice", level: "info", message: "Nothing to compact yet." });
       return false;
@@ -688,6 +732,35 @@ export class AgentRuntime {
     this.d.store?.saveCompaction(this.d.sessionId, { boundarySeq: result.boundarySeq, summary: result.summary, tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter });
     this.emit({ type: "compaction", tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter, usedModel: result.usedModel, manual });
     return true;
+  }
+
+  /**
+   * Compact at a natural boundary (tests pass after edits) rather than in the
+   * middle of an investigation: the summary then records a settled state, and
+   * the cache prefix is rebuilt once, deliberately.
+   */
+  private async checkpoint(calls: ToolCall[], st: TurnState, signal: AbortSignal): Promise<void> {
+    if (!st.filesChanged.size) return;
+    const passed = st.tests.length > 0 && st.tests[st.tests.length - 1]!.passed && calls.some((c) => c.name === "run_tests" || c.name === "diagnose_failure");
+    if (!passed) return;
+    const fill = this.d.context.fill(this.d.systemPrompt(), this.d.tools.definitions());
+    if (fill < this.d.config.context.checkpointThreshold) return;
+    this.emit({ type: "notice", level: "info", message: `Checkpoint: tests pass after edits and context is ${Math.round(fill * 100)}% full; compacting now.` });
+    await this.compact(false, signal);
+  }
+
+  /** Facts tied to content hashes, so the compacted context knows exactly what is current. */
+  private evidenceFacts(): string[] {
+    const out = [...(this.d.compiler?.facts() ?? [])];
+    for (const f of [...this.sessionFiles].slice(-20)) {
+      try {
+        const abs = this.d.workspace.resolve(f).absolute;
+        out.push(existsSync(abs) ? `${f} now has content hash ${sha256(readFileSync(abs)).slice(0, 12)} (re-read before editing)` : `${f} no longer exists`);
+      } catch {
+        /* outside the workspace */
+      }
+    }
+    return out;
   }
 
   private finish(st: TurnState, status: TerminalStatus, reason?: string): TurnResult {
@@ -699,6 +772,7 @@ export class AgentRuntime {
       status,
       mode: this.mode,
       ...(st.verification ? { verification: st.verification } : {}),
+      ...(st.contextMap ? { contextMap: st.contextMap } : {}),
       ...(reason ? { reason } : {}),
       iterations: st.iterations,
       toolCalls: st.toolCalls,

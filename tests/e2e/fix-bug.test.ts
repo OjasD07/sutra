@@ -136,7 +136,10 @@ describe("e2e: discover, fix, verify, resume", () => {
     expect(r.stdout).toContain("seconds to milliseconds");
     const req = server.requests.at(-1)!;
     const users = req.messages.filter((m) => m.role === "user").map((m) => m.content);
-    expect(users).toEqual(["The session tests fail. Find and fix the bug.", "What did you change?"]);
+    // The first request was ambiguous, so it carried a focused map; the follow-up names no code and gets none.
+    expect(users[0]).toMatch(/^The session tests fail\. Find and fix the bug\.\n\n\[Sutra repository map — centred on /);
+    expect(users[1]).toBe("What did you change?");
+    expect(users).toHaveLength(2);
     // Every earlier assistant message still carries reasoning_content (else the mock returns 400).
     expect(req.messages.filter((m) => m.role === "assistant").every((m) => typeof m.reasoning_content === "string")).toBe(true);
   }, 60_000);

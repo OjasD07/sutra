@@ -44,7 +44,7 @@ afterAll(() => {});
 describe("tool registry", () => {
   it("exposes the v1 tool set with valid JSON schemas", () => {
     expect(registry.list().map((t) => t.name)).toEqual([
-      "read_file", "list_directory", "glob_files", "search_files", "grep_search", "write_file", "edit_file", "apply_patch", "execute_command", "run_tests", "git_status", "git_diff", "repo_map", "find_symbol", "code_search", "update_plan", "hypotheses",
+      "read_file", "list_directory", "glob_files", "search_files", "grep_search", "write_file", "edit_file", "apply_patch", "execute_command", "run_tests", "diagnose_failure", "git_status", "git_diff", "repo_map", "find_symbol", "code_search", "inspect_symbol", "update_plan", "hypotheses", "get_output",
     ]);
     for (const t of registry.list()) {
       expect(t.version).toMatch(/^\d+\.\d+\.\d+$/);

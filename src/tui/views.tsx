@@ -184,6 +184,12 @@ export function CostView(props: { ui: UiOptions; data: CostData }) {
             <Text>{`  ${formatUsd(t.costUsd)} of ${formatUsd(d.budgetUsd)}`}</Text>
           </Row>
         ) : null}
+        {d.compiler && (d.compiler.charsSaved > 0 || d.compiler.rerunsSkipped > 0) ? (
+          <Row ui={ui} label="Compiler">
+            <Text>{`~${n(Math.round(d.compiler.charsSaved / 4))} tokens kept out`}</Text>
+            <Text color={m}>{`  ${d.compiler.testDeltas} test deltas · ${d.compiler.readsDeduped} unchanged re-reads · ${d.compiler.rerunsSkipped} re-runs skipped`}</Text>
+          </Row>
+        ) : null}
         <Row ui={ui} label="Time">
           <Text>{`model ${(t.modelLatencyMs / 1000).toFixed(1)}s`}</Text>
           <Text color={m}>{" · "}</Text>

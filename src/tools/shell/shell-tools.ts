@@ -134,16 +134,17 @@ function resolveTestCommand(a: { filter?: string }, ctx: ToolContext): string | 
   return base ? buildTestCommand(base, a.filter) : null;
 }
 
-export const runTestsTool: Tool<{ filter?: string; timeout_ms?: number }> = {
+export const runTestsTool: Tool<{ filter?: string; timeout_ms?: number; force?: boolean }> = {
   name: "run_tests",
   description:
-    "Run the project's test suite using the configured or detected test command (package.json test script, cargo, go, pytest, make). Pass `filter` to target specific test files or names.",
+    "Run the project's test suite using the configured or detected test command (package.json test script, cargo, go, pytest, make). Pass `filter` to target specific test files or names. A repeat of the previous run is reported as a delta (unchanged failures by name, new or changed ones in full); an identical run with nothing changed since is skipped unless force is true.",
   version: "1.0.0",
   category: "execute",
   readOnly: false,
   schema: z.object({
     filter: z.string().optional().describe("Test file(s) or name filter appended to the test command"),
     timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).optional(),
+    force: z.boolean().optional().describe("Run even if nothing changed since an identical run (flaky tests)"),
   }),
   describe: (a, ctx) => {
     const cmd = resolveTestCommand(a, ctx) ?? "(no test command detected)";

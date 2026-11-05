@@ -37,6 +37,8 @@ export interface TurnResult {
   testsRun: { command: string; passed: boolean; counts?: TestCounts }[];
   /** Harness-owned evidence for the turn (finish gate). Absent when nothing was changed or checked. */
   verification?: Verification;
+  /** Whether a repository map was added to this request, and why. */
+  contextMap?: { included: boolean; reason: string };
 }
 
 export interface ApprovalRequest {

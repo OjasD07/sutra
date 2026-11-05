@@ -2,10 +2,13 @@ import { z } from "zod";
 import type { ToolDefinition } from "../providers/types.js";
 import { updatePlanTool } from "./agent/plan-tool.js";
 import { hypothesesTool } from "./agent/hypotheses-tool.js";
+import { getOutputTool } from "./agent/output-tool.js";
 import { globFilesTool, grepSearchTool, listDirectoryTool, readFileTool, searchFilesTool } from "./filesystem/read-tools.js";
 import { applyPatchTool, editFileTool, writeFileTool } from "./filesystem/write-tools.js";
 import { gitDiffTool, gitStatusTool } from "./git/git-tools.js";
 import { executeCommandTool, runTestsTool } from "./shell/shell-tools.js";
+import { diagnoseFailureTool } from "./shell/diagnose-tool.js";
+import { inspectSymbolTool } from "./index/inspect-tools.js";
 import { codeSearchTool, findSymbolTool, repoMapTool } from "./index/index-tools.js";
 import type { Tool } from "./types.js";
 
@@ -63,11 +66,14 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(applyPatchTool)
     .register(executeCommandTool)
     .register(runTestsTool)
+    .register(diagnoseFailureTool)
     .register(gitStatusTool)
     .register(gitDiffTool)
     .register(repoMapTool)
     .register(findSymbolTool)
     .register(codeSearchTool)
+    .register(inspectSymbolTool)
     .register(updatePlanTool)
-    .register(hypothesesTool);
+    .register(hypothesesTool)
+    .register(getOutputTool);
 }

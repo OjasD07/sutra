@@ -25,6 +25,8 @@ export function renderBenchSummary(report: BenchReport, theme: Theme, color: boo
     `  Cost per pass   ${s.meanCostPerPassUsd === null ? "—" : formatUsd(s.meanCostPerPassUsd)}`,
     `  Total time      ${secs(s.totalDurationMs)}`,
     `  Tokens          ${n(report.results.reduce((a, r) => a + r.inputTokens, 0))} in · ${n(report.results.reduce((a, r) => a + r.outputTokens, 0))} out`,
+    `  Prompt cache    ${Math.round((s.cacheHitRate ?? 0) * 100)}% of input tokens served from the provider's cache (as reported by the provider)`,
+    ...(report.settings ? [`  Settings        quality ${report.settings.quality}${report.settings.economy ? " + economy" : ""} · map ${report.settings.map} · compiler ${report.settings.compile ? "on" : "off"}`] : []),
     "",
     c.hex(theme.muted)("  Each run is a saved session: `sutra replay <session>` shows exactly what the agent did."),
   ];
@@ -38,7 +40,7 @@ export function benchMarkdown(report: BenchReport): string {
   );
   const s = report.summary;
   return [
-    `**Sutra ${report.sutraVersion} · ${report.provider} / ${report.model} · ${report.startedAt.slice(0, 10)}** — ${s.passed}/${s.total} passed, ${formatUsd(s.totalCostUsd)} total`,
+    `**Sutra ${report.sutraVersion} · ${report.provider} / ${report.model} · ${report.startedAt.slice(0, 10)}** — ${s.passed}/${s.total} passed, ${formatUsd(s.totalCostUsd)} total, ${Math.round((s.cacheHitRate ?? 0) * 100)}% prompt-cache hits${report.settings ? ` · quality ${report.settings.quality}${report.settings.economy ? "+economy" : ""}, map ${report.settings.map}` : ""}`,
     "",
     "| Task | Result | Cost | Time | Requests | Tool calls | Agent status |",
     "| --- | --- | --- | --- | --- | --- | --- |",

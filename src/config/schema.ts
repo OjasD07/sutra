@@ -124,6 +124,18 @@ export const ConfigSchema = z.object({
        */
       maxContextTokens: z.number().int().positive().default(200_000),
       keepRecentTurns: z.number().int().min(1).default(2),
+      /**
+       * Compile tool results: repeated test runs as deltas, unchanged re-reads
+       * as pointers, identical re-runs skipped. Full output stays available
+       * through get_output.
+       */
+      compile: z.boolean().default(true),
+      /**
+       * Checkpoint compaction: after tests pass following edits (a natural
+       * boundary), compact early if context is above this fraction of the
+       * limit, instead of waiting for compactThreshold mid-investigation.
+       */
+      checkpointThreshold: z.number().min(0.1).max(0.95).default(0.5),
     })
     .prefault({}),
   quality: z
@@ -133,6 +145,12 @@ export const ConfigSchema = z.object({
        * packet, task contract, finish gate, alignment review, one
        * counterexample round. deep: adds a second round and competing patches.
        */
+      /**
+       * Experiment: when a fresh, unambiguous test result settles every
+       * criterion (a bug whose failing tests now pass, nothing regressed, no
+       * test edited), skip the contract, review and judge calls.
+       */
+      economy: z.boolean().default(false),
       mode: z.enum(["fast", "balanced", "deep"]).default("balanced"),
     })
     .prefault({}),
@@ -140,8 +158,15 @@ export const ConfigSchema = z.object({
     .object({
       /** Build a repository index (symbols, reference graph, ranked search) at session start. */
       enabled: z.boolean().default(true),
-      /** Token budget for the repository map placed in the system prompt (0 = no map in the prompt). */
-      mapTokens: z.number().int().min(0).max(16_000).default(2000),
+      /**
+       * auto: a focused map is appended to a request only when it is
+       * ambiguous or spans files (not when it names the file, a test or a
+       * unique symbol). always: a static map in the system prompt, every
+       * request. never: no map; repo_map is still available as a tool.
+       */
+      mapMode: z.enum(["auto", "always", "never"]).default("auto"),
+      /** Token budget for the map (0 = no map). */
+      mapTokens: z.number().int().min(0).max(16_000).default(1200),
       maxFiles: z.number().int().positive().default(5000),
       /** Optional embeddings for code_search (any OpenAI-compatible /embeddings endpoint). */
       embeddings: z

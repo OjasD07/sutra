@@ -50,6 +50,10 @@ export interface BenchResult {
   /** The harness's own finish-gate verdict (compare with `passed`, which is the independent check). */
   evidence?: string;
   quality: string;
+  /** Whether a repository map was added to the request, and why. */
+  contextMap?: { included: boolean; reason: string };
+  /** What the context compiler saved in this task. */
+  compiler?: { readsDeduped: number; testDeltas: number; rerunsSkipped: number; charsSaved: number };
 }
 
 export interface BenchReport {
@@ -62,8 +66,22 @@ export interface BenchReport {
   profile: string;
   sandbox: string;
   maxCostPerTaskUsd: number;
+  /** Harness settings that change cost and behaviour, so runs can be compared. */
+  settings?: { quality: string; economy: boolean; map: string; compile: boolean };
   results: BenchResult[];
-  summary: { passed: number; total: number; passRate: number; totalCostUsd: number; costComplete: boolean; totalDurationMs: number; meanCostPerPassUsd: number | null };
+  summary: {
+    passed: number;
+    total: number;
+    passRate: number;
+    totalCostUsd: number;
+    costComplete: boolean;
+    totalDurationMs: number;
+    meanCostPerPassUsd: number | null;
+    inputTokens?: number;
+    cachedInputTokens?: number;
+    /** Fraction of input tokens the provider reported as served from its prompt cache. */
+    cacheHitRate?: number;
+  };
 }
 
 /** The bundled tasks (benchmarks/tasks next to package.json). */
@@ -166,12 +184,14 @@ export async function runBench(o: BenchOptions): Promise<BenchReport> {
     let reason: string | undefined;
     let filesChanged: string[] = [];
     let evidence: string | undefined;
+    let contextMap: BenchResult["contextMap"];
     try {
       const r = await session.runtime.runTurn(task.prompt, signal);
       agentStatus = timeout.aborted ? "timeout" : r.status;
       reason = r.reason;
       filesChanged = r.filesChanged;
       evidence = r.verification?.overall;
+      contextMap = r.contextMap;
     } catch (err) {
       reason = (err as Error).message;
     } finally {
@@ -200,6 +220,8 @@ export async function runBench(o: BenchOptions): Promise<BenchReport> {
       verifyTail: (v.stdout + v.stderr).trim().split("\n").slice(-6).join("\n"),
       ...(evidence ? { evidence } : {}),
       quality: config.quality.mode,
+      ...(contextMap ? { contextMap } : {}),
+      compiler: { ...session.compiler.stats },
     };
     spent += t.costUsd;
     results.push(result);
@@ -209,6 +231,8 @@ export async function runBench(o: BenchOptions): Promise<BenchReport> {
 
   const passed = results.filter((r) => r.passed).length;
   const totalCostUsd = results.reduce((a, r) => a + r.costUsd, 0);
+  const inputTokens = results.reduce((a, r) => a + r.inputTokens, 0);
+  const cachedInputTokens = results.reduce((a, r) => a + r.cachedInputTokens, 0);
   return {
     schema: "sutra.bench/v1",
     sutraVersion: version(),
@@ -219,6 +243,7 @@ export async function runBench(o: BenchOptions): Promise<BenchReport> {
     profile: "flow",
     sandbox: sandboxName,
     maxCostPerTaskUsd: o.maxCostPerTaskUsd,
+    settings: { quality: o.config.quality.mode, economy: o.config.quality.economy, map: o.config.index.enabled ? o.config.index.mapMode : "off", compile: o.config.context.compile },
     results,
     summary: {
       passed,
@@ -228,6 +253,9 @@ export async function runBench(o: BenchOptions): Promise<BenchReport> {
       costComplete: results.every((r) => r.costComplete),
       totalDurationMs: results.reduce((a, r) => a + r.durationMs, 0),
       meanCostPerPassUsd: passed ? totalCostUsd / passed : null,
+      inputTokens,
+      cachedInputTokens,
+      cacheHitRate: inputTokens ? cachedInputTokens / inputTokens : 0,
     },
   };
 }

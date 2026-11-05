@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import { glob } from "tinyglobby";
 import { z } from "zod";
 import { hasRipgrep, runProcess } from "../../utils/process.js";
-import { isProbablyBinary } from "../../utils/text.js";
+import { isProbablyBinary, sha256 } from "../../utils/text.js";
 import { ALWAYS_IGNORED, loadIgnore, walkFiles } from "../../utils/walk.js";
 import { fail, ok, type Tool } from "../types.js";
 
@@ -49,7 +49,7 @@ export const readFileTool: Tool<{ path: string; offset?: number; limit?: number 
       .map((l, i) => `${String(start + i + 1).padStart(width)}\t${l.length > MAX_LINE_CHARS ? l.slice(0, MAX_LINE_CHARS) + "… [line truncated]" : l}`)
       .join("\n");
     const more = end < lines.length ? `\n[showing lines ${start + 1}-${end} of ${lines.length}; use offset to read more]` : "";
-    return ok(lines.length === 0 ? "[empty file]" : body + more, { path: p.display, lines: lines.length, from: start + 1, to: end });
+    return ok(lines.length === 0 ? "[empty file]" : body + more, { path: p.display, lines: lines.length, from: start + 1, to: end, hash: sha256(buf) });
   },
 };
 

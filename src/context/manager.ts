@@ -20,6 +20,8 @@ export interface CompactionFacts {
   commands: { command: string; exitCode: number | null }[];
   unresolvedErrors: string[];
   plan: string | null;
+  /** Current evidence: latest test results, files with their current content hashes. */
+  evidence?: string[];
 }
 
 export interface CompactionResult {
@@ -98,6 +100,11 @@ export class ContextManager {
     return this.estimator.estimateMessages(this.build(systemPrompt), tools);
   }
 
+  /** Fraction of the context limit the next request would use. */
+  fill(systemPrompt: string, tools: ToolDefinition[]): number {
+    return this.estimate(systemPrompt, tools) / this.budget.limit;
+  }
+
   shouldCompact(systemPrompt: string, tools: ToolDefinition[]): boolean {
     return this.estimate(systemPrompt, tools) > this.budget.limit * this.budget.threshold;
   }
@@ -161,6 +168,10 @@ function renderFacts(f: CompactionFacts): string {
   if (f.unresolvedErrors.length) {
     lines.push("- Unresolved errors:");
     for (const e of f.unresolvedErrors.slice(-5)) lines.push(`  - ${oneLine(e, 200)}`);
+  }
+  if (f.evidence?.length) {
+    lines.push("- Current evidence (still valid at compaction time):");
+    for (const e of f.evidence) lines.push(`  - ${e}`);
   }
   if (f.plan) lines.push("- Plan at compaction time:", f.plan.split("\n").map((l) => `  ${l}`).join("\n"));
   return lines.join("\n");

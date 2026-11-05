@@ -36,6 +36,8 @@ export interface ToolContext {
   repoIndex?: RepoIndexService | null;
   /** Hypothesis ledger for the hypotheses tool. */
   hypotheses?: HypothesisLedger | null;
+  /** Full output of an earlier call (get_output). */
+  outputs?: (callId: string) => string | undefined;
 }
 
 export type ToolErrorCode =

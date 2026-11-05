@@ -115,7 +115,20 @@ The OpenAI-compatible adapter sends standard Chat Completions (streaming, `tools
 { "quality": { "mode": "balanced" } }
 ```
 
-`fast`, `balanced` or `deep`. Also `--quality <mode>`, `SUTRA_QUALITY` and `/quality`. See [quality-engine.md](quality-engine.md) for what each mode does and costs.
+`fast`, `balanced` or `deep`. Also `--quality <mode>`, `SUTRA_QUALITY` and `/quality`.
+
+`"economy": true` (or `--economy`) is an experiment: for a bug whose baseline has named failing tests, the acceptance criteria come from that baseline instead of a contract call, and when a fresh full-suite run passes with no test file changed, the review and judge calls are skipped. Anything less clear-cut takes the normal path. See [quality-engine.md](quality-engine.md) for what each mode does and costs.
+
+## Context compiler and checkpoints
+
+```json
+{ "context": { "compile": true, "checkpointThreshold": 0.5 } }
+```
+
+| Key | |
+| --- | --- |
+| `compile` | Send a repeated test run as a delta against the previous run, an unchanged re-read as a pointer to the earlier result, and skip an identical test run when nothing changed since. The full output of every call stays available through `get_output`. See [token-economy-implemented.md](token-economy-implemented.md) |
+| `checkpointThreshold` | When tests pass after edits and the context is above this fraction of `maxContextTokens`, compact then, at a settled point, instead of later in the middle of an investigation |
 
 ## Repository index
 
@@ -123,7 +136,8 @@ The OpenAI-compatible adapter sends standard Chat Completions (streaming, `tools
 {
   "index": {
     "enabled": true,
-    "mapTokens": 2000,
+    "mapMode": "auto",
+    "mapTokens": 1200,
     "maxFiles": 5000,
     "embeddings": { "baseUrl": "http://localhost:11434/v1", "model": "nomic-embed-text" }
   }
@@ -133,7 +147,8 @@ The OpenAI-compatible adapter sends standard Chat Completions (streaming, `tools
 | Key | |
 | --- | --- |
 | `enabled` | Build the index at session start and offer `repo_map`, `find_symbol` and `code_search`. `--no-index` turns it off for one run |
-| `mapTokens` | Size of the repository map placed in the system prompt; `0` keeps the tools but leaves the map out of the prompt |
+| `mapMode` | `auto` (default): a focused map is appended to a request only when it is ambiguous or spans files, not when it names the file, a test or a unique symbol. `always`: a static map in the system prompt on every request (the old behaviour). `never`: no map; `repo_map` is still a tool. Also `--map` |
+| `mapTokens` | Size budget of the map; `0` means no map |
 | `maxFiles` | Stop indexing after this many source files (the map then says so) |
 | `embeddings` | Optional. Any OpenAI-compatible `/embeddings` endpoint. `code_search` then fuses BM25 with embedding similarity (reciprocal-rank fusion). Use `apiKeyEnv` to name an environment variable holding the key; keys are never stored in config. `maxChunks` caps how much code is embedded (default 4,000 chunks) |
 

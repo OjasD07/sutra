@@ -20,8 +20,10 @@ import { createSandbox, type SandboxStatus } from "../sandbox/sandbox.js";
 import { RepoIndexService } from "../index/service.js";
 import { QualityEngine } from "../quality/engine.js";
 import { HypothesisLedger } from "../quality/ledger.js";
+import { ContextCompiler } from "../context/compiler.js";
+import { decideFocusMap } from "../context/focus-map.js";
 
-const INDEX_TOOLS = new Set(["repo_map", "find_symbol", "code_search"]);
+const INDEX_TOOLS = new Set(["repo_map", "find_symbol", "code_search", "inspect_symbol"]);
 import type { ApprovalRequest } from "./events/types.js";
 import { PlanStore } from "./planning/plan.js";
 
@@ -43,6 +45,7 @@ export interface SessionHandle {
   repoIndex: RepoIndexService | null;
   quality: QualityEngine;
   ledger: HypothesisLedger;
+  compiler: ContextCompiler;
 }
 
 export interface OpenSessionOptions {
@@ -142,7 +145,8 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
         : {}),
     });
     const stats = repoIndex.refresh(true);
-    if (config.index.mapTokens > 0 && stats.files > 0) repoMap = repoIndex.index.map({ maxTokens: config.index.mapTokens });
+    // "always" keeps the old static map in the system prompt; "auto" decides per request (runtime).
+    if (config.index.mapMode === "always" && config.index.mapTokens > 0 && stats.files > 0) repoMap = repoIndex.index.map({ maxTokens: config.index.mapTokens });
   }
 
   const redactor = new SecretRedactor();
@@ -152,6 +156,8 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
   const date = new Date().toISOString().slice(0, 10);
 
   const ledger = new HypothesisLedger();
+  const compiler = new ContextCompiler(workspace.root, config.context.compile);
+  const mapped = new Set<string>();
   // The engine talks to the runtime through closures (the runtime is created just below).
   const quality = new QualityEngine({
     config,
@@ -187,6 +193,16 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
     repoIndex,
     quality,
     ledger,
+    compiler,
+    focusMap:
+      repoIndex && config.index.mapMode === "auto" && config.index.mapTokens > 0
+        ? (input, followUp) => {
+            repoIndex.refresh();
+            const d = decideFocusMap(repoIndex.index, input, config.index.mapTokens, { followUp, alreadyMapped: mapped });
+            if (d.text) for (const f of d.focus) mapped.add(f);
+            return d;
+          }
+        : null,
     toolLogDir: paths.toolLogs(record.id),
     // Kept stable within a session so the provider's prefix cache stays warm;
     // the plan reaches the model through update_plan results instead.
@@ -207,5 +223,5 @@ export function openSession(o: OpenSessionOptions): SessionHandle {
       }),
   });
 
-  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired, sandbox, repoIndex, quality, ledger };
+  return { runtime, record, workspace, permissions, plan, usage, context, tools, instructions, resumed, restored, repairedToolCalls: repaired, sandbox, repoIndex, quality, ledger, compiler };
 }

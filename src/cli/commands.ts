@@ -44,6 +44,8 @@ export interface CostData {
   price?: ModelPrice;
   peakNow: boolean;
   budgetUsd?: number;
+  /** What the context compiler kept out of the context. */
+  compiler?: { readsDeduped: number; testDeltas: number; rerunsSkipped: number; charsSaved: number };
 }
 
 /** Rich views the terminal UI renders instead of the plain `output` text. */
@@ -189,8 +191,11 @@ export async function runSlashCommand(input: string, ctx: CommandContext): Promi
         ...(price ? { price } : {}),
         peakNow: price ? isPeak(price, new Date()) : false,
         ...(config.budget.maxSessionCostUsd ? { budgetUsd: config.budget.maxSessionCostUsd } : {}),
+        ...(session.compiler ? { compiler: { ...session.compiler.stats } } : {}),
       };
-      return { output: costReport(session.usage.totals, config, rt.model), view: { kind: "cost", data } };
+      const cs = session.compiler?.stats;
+      const saved = cs && cs.charsSaved ? `\nContext compiler: ${cs.testDeltas} test deltas, ${cs.readsDeduped} unchanged re-reads, ${cs.rerunsSkipped} identical re-runs skipped (~${Math.round(cs.charsSaved / 4).toLocaleString("en-US")} tokens kept out)` : "";
+      return { output: costReport(session.usage.totals, config, rt.model) + saved, view: { kind: "cost", data } };
     }
     case "budget": {
       if (!arg) {

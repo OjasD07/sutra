@@ -257,6 +257,8 @@ What happens around a turn (details in [docs/quality-engine.md](docs/quality-eng
 
 On the bundled tasks with live DeepSeek, `balanced` solved 4/4 and its gate said "verified" on exactly those 4, for $0.0074 in total. In `deep` mode the verifier found a real boundary bug the project's tests didn't cover, and the agent fixed it. These tasks are too easy to show pass-rate gains: that needs a harder benchmark, which is the next step.
 
+An opt-in `--economy` experiment skips the contract, review and judge calls when a fresh full test run settles every criterion of a bug fix. On the same tasks it kept 4/4 verified, at $0.0055 instead of $0.0065 and 31 s instead of 46 s (one run each). Test-run deltas, re-read dedupe and the conditional map are described, with their measurements, in [docs/token-economy-implemented.md](docs/token-economy-implemented.md).
+
 ## Cost and budgets
 
 Sutra records every request's input, cached, output and reasoning tokens, plus latency and tool time. `/cost` shows the totals:
@@ -332,7 +334,8 @@ The bundled suite has four tasks (a unit-conversion bug, off-by-one pagination, 
 
 When a session starts, Sutra indexes the repository's source code, in about 100 ms for a hundred files and a couple of seconds for a few thousand. The index feeds three things:
 
-- **A repository map in the prompt.** Every definition is extracted (functions, classes, methods, types). Files are linked by which names they use from each other and ranked with PageRank. The model starts with an outline of the most important files and signatures, with line numbers, within a 2,000-token budget. It's built once per session, so the provider's prompt cache keeps working.
+- **A repository map, only when it helps.** Every definition is extracted (functions, classes, methods, types). Files are linked by which names they use from each other and ranked with PageRank. When a request is ambiguous or spans files, Sutra appends a map centred on the likely files (about 1,200 tokens). When the request already names the file, a test that resolves to one file, or a function with a single definition, it sends no map. `--map always` restores the old static map in the system prompt.
+- **`inspect_symbol`** returns a function's exact, line-numbered body, its callers (with the function each call sits in) and the tests that mention it, in one call. The file then counts as read, so the model can edit it straight away.
 - **`find_symbol`** gives a name's definitions (`file:line` and signature) and every place it's used.
 - **`code_search`** handles questions in words ("where are expired sessions refreshed"). It ranks functions and classes with BM25 over identifiers split into words (`refreshAuthToken` → refresh, auth, token). Optionally it combines this with embeddings from any OpenAI-compatible `/embeddings` endpoint, such as a local Ollama model.
 
@@ -374,7 +377,7 @@ Put an `AGENTS.md` in your repository, or `.sutra/AGENTS.md`, to tell Sutra how 
 - **Nothing gets lost.** Every tool call gets exactly one recorded result, including failures, denials and cancellations. Repeated identical calls are detected and stopped.
 - **Careful edits.** Writes are atomic and checked after writing. Sutra won't overwrite a file it hasn't read, or one that changed since it last looked.
 
-**Built-in tools:** `read_file`, `list_directory`, `glob_files`, `search_files`, `grep_search`, `repo_map`, `find_symbol`, `code_search`, `write_file`, `edit_file`, `apply_patch`, `execute_command`, `run_tests`, `git_status`, `git_diff`, `update_plan`, `hypotheses`.
+**Built-in tools:** `read_file`, `list_directory`, `glob_files`, `search_files`, `grep_search`, `repo_map`, `find_symbol`, `code_search`, `inspect_symbol`, `write_file`, `edit_file`, `apply_patch`, `execute_command`, `run_tests`, `diagnose_failure`, `git_status`, `git_diff`, `update_plan`, `hypotheses`, `get_output`.
 
 More detail is in [docs/architecture.md](docs/architecture.md).
 
@@ -395,7 +398,7 @@ Every option, and the order in which settings override each other, is listed in 
 
 ## Status
 
-Sutra is an **early preview (v0.1)**. The core is complete and well tested: the agent loop, all tools, permissions, the sandbox, sessions, compaction, cost tracking, audit export, benchmarks and the terminal UI. More than 170 automated tests cover it, including an end-to-end run that fixes the example bug through the real CLI and the real test suite. On macOS they include live sandbox tests that check writes, credential reads and the network are really blocked.
+Sutra is an **early preview (v0.1)**. The core is complete and well tested: the agent loop, all tools, permissions, the sandbox, sessions, compaction, cost tracking, audit export, benchmarks and the terminal UI. About 200 automated tests cover it, including an end-to-end run that fixes the example bug through the real CLI and the real test suite. On macOS they include live sandbox tests that check writes, credential reads and the network are really blocked.
 
 What to know before relying on it:
 
@@ -420,6 +423,7 @@ What to know before relying on it:
 - [x] Benchmark harness with independently verified tasks
 - [x] Repository map, symbol lookup and ranked code search (optional embeddings)
 - [x] Quality engine: evidence packet, finish gate, counterexamples, competing patches, alignment review
+- [x] Context compiler: test-run deltas, unchanged re-reads as pointers, skipped identical re-runs, full output on demand
 - [ ] A harder held-out benchmark with ablations of each quality layer
 - [ ] Measured gains from the index on large repositories
 - [ ] Published benchmark results across models
