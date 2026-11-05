@@ -212,7 +212,8 @@ async function runOne({ harnessId, adapter, task, trial, model, key, prices, out
     wallMs: r.ms,
     requests: reqs.length,
     failedRequests: reqs.filter((q) => q.status >= 400).length,
-    requestsWithoutUsage: reqs.filter((q) => q.status < 400 && !q.usageFound).length,
+    // Only model calls are billed; GET requests (such as listing models) carry no usage by design.
+    requestsWithoutUsage: reqs.filter((q) => q.method === "POST" && q.status < 400 && !q.usageFound).length,
     inputTokens: sum("input"),
     cachedInputTokens: sum("cached"),
     outputTokens: sum("output"),
