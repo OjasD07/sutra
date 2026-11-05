@@ -27,7 +27,7 @@
 </p>
 
 ```bash
-npm install -g github:cneuralnetwork/sutra
+git clone https://github.com/cneuralnetwork/sutra.git && cd sutra && npm install && npm link
 sutra init     # pick a provider, paste a key, choose a model
 sutra          # start in any project
 ```
@@ -102,23 +102,13 @@ How to read it: each turn is one **thread**. Sutra's explanations sit on the `â”
 **1. Install.** You need Node.js 22.13 or newer (`node -v`), on macOS or Linux. `ripgrep` is optional and makes search faster.
 
 ```bash
-npm install -g github:cneuralnetwork/sutra
-```
-
-This builds Sutra from this repository and puts the `sutra` command on your PATH. Update later by running the same command again.
-
-<details>
-<summary>Install from source instead (for contributing)</summary>
-
-```bash
 git clone https://github.com/cneuralnetwork/sutra.git
 cd sutra
-npm install
-npm run build
+npm install     # installs dependencies and builds Sutra
 npm link        # puts the `sutra` command on your PATH
 ```
 
-</details>
+To update later, run `git pull && npm install` in the same folder.
 
 **2. Connect a model.** Run the guided setup:
 
@@ -168,7 +158,7 @@ sutra "explain how this repository is organised"
 Sutra asks before it changes a file or runs a command, so a first run is safe. To watch it fix a real bug, try the bundled example:
 
 ```bash
-git clone https://github.com/cneuralnetwork/sutra.git && cd sutra/examples/session-expiry
+cd examples/session-expiry                 # inside the folder you cloned
 npm test                                   # 2 of 4 tests fail
 sutra "The session tests fail. Find and fix the bug."
 ```
