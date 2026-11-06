@@ -1,0 +1,70 @@
+---
+interface Props {
+  compact?: boolean;
+}
+
+const { compact = false } = Astro.props;
+---
+
+<div
+  class:list={['session-card', { 'session-card-compact': compact }]}
+  role="img"
+  aria-label="Illustrative Sutra session: Sutra reads the session file, finds the expired-session bug, waits for approval on the edit, then runs the tests. All four tests pass. Five tool calls, nine seconds, 0.0016 dollars."
+>
+  <div class="terminal-bar">
+    <span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="terminal-title">sutra / workspace</span>
+    <span class="terminal-status">● live</span>
+  </div>
+
+  <div class="session-body">
+    <p class="session-prompt">
+      <span class="session-prompt-mark">›</span>
+      The session tests fail. Find and fix the bug.
+    </p>
+
+    <div class="session-thread">
+      <div class="session-node">
+        <span class="thread-dot thread-dot-gold" aria-hidden="true"></span>
+        <span class="session-tool">read_file</span>
+        <span class="session-file">src/session.js</span>
+        <span class="session-state">16 lines</span>
+      </div>
+      <div class="session-node">
+        <span class="thread-dot thread-dot-gold" aria-hidden="true"></span>
+        <span class="session-tool">grep_search</span>
+        <span class="session-file">expiresAt</span>
+        <span class="session-state">8 matches</span>
+      </div>
+      <div class="session-node">
+        <span class="thread-dot thread-dot-gold" aria-hidden="true"></span>
+        <span class="session-tool">run_tests</span>
+        <span class="session-file">npm test</span>
+        <span class="session-state session-state-error">2 of 4 failed</span>
+      </div>
+      <div class="session-node session-node-waiting">
+        <span class="thread-dot thread-dot-gold" aria-hidden="true"></span>
+        <span class="session-tool">edit_file</span>
+        <span class="session-file">src/session.js</span>
+        <span class="session-state session-state-waiting">waiting on you</span>
+      </div>
+      <div class="session-node">
+        <span class="thread-dot thread-dot-green" aria-hidden="true"></span>
+        <span class="session-tool">run_tests</span>
+        <span class="session-file">npm test</span>
+        <span class="session-state session-state-success">4 of 4 passed</span>
+      </div>
+    </div>
+
+    <div class="session-complete">
+      <span class="session-check" aria-hidden="true">✓</span>
+      Complete · tests passed
+    </div>
+  </div>
+
+  <div class="session-foot">
+    <span>5 tool calls</span>
+    <span>9s</span>
+    <span>$0.0016</span>
+  </div>
+</div>

@@ -1,0 +1,78 @@
+---
+import { NAV_LINKS, SITE } from '../lib/site';
+import Icon from './Icon.astro';
+import Logo from './Logo.astro';
+import ThemeToggle from './ThemeToggle.astro';
+---
+
+<header class="site-header" data-site-header>
+  <div class="container header-inner">
+    <a class="brand-link" href="/" aria-label="Sutra home">
+      <Logo />
+    </a>
+
+    <nav class="desktop-nav" aria-label="Primary">
+      {NAV_LINKS.map((link) => (
+        <a href={link.href}>{link.label}</a>
+      ))}
+    </nav>
+
+    <div class="header-actions">
+      <a
+        class="icon-link github-link"
+        href={SITE.repo}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Sutra on GitHub"
+        data-analytics="github-header"
+      >
+        <Icon name="github" size={19} />
+      </a>
+      <ThemeToggle />
+      <a
+        class="btn btn-primary btn-sm header-cta"
+        href={`${SITE.repo}#quick-start`}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-analytics="download-header"
+      >
+        <Icon name="github" size={16} />
+        Download
+      </a>
+      <button
+        class="nav-toggle"
+        type="button"
+        data-nav-toggle
+        aria-expanded="false"
+        aria-controls="mobile-nav"
+        aria-label="Open menu"
+      >
+        <Icon name="menu" size={21} class="nav-icon-open" />
+        <Icon name="x" size={21} class="nav-icon-close" />
+      </button>
+    </div>
+  </div>
+
+  <nav class="mobile-nav" id="mobile-nav" aria-label="Mobile">
+    <div class="container mobile-nav-inner">
+      {NAV_LINKS.map((link) => (
+        <a href={link.href} data-nav-link>{link.label}</a>
+      ))}
+      <a href={SITE.docs} target="_blank" rel="noopener noreferrer" data-nav-link>
+        Documentation
+        <Icon name="external" size={15} />
+      </a>
+      <a
+        class="btn btn-primary mobile-download"
+        href={`${SITE.repo}#quick-start`}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-nav-link
+        data-analytics="download-mobile"
+      >
+        <Icon name="github" size={17} />
+        Download on GitHub
+      </a>
+    </div>
+  </nav>
+</header>

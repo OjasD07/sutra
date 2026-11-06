@@ -1,0 +1,87 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { SITE } from '../lib/site';
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'WebPage',
+  name: 'Privacy · Sutra',
+  url: `${SITE.url}/privacy/`,
+  description: 'How the Sutra website handles analytics, and where to read about the CLI’s security model.',
+  inLanguage: 'en',
+  isPartOf: {
+    '@type': 'WebSite',
+    name: SITE.name,
+    url: `${SITE.url}/`,
+  },
+};
+---
+
+<BaseLayout
+  title="Privacy"
+  description="How the Sutra website handles analytics, and where to read about the CLI’s security model."
+  jsonLd={jsonLd}
+  bodyClass="page-simple"
+>
+  <section class="page-hero">
+    <div class="container page-hero-inner">
+      <p class="eyebrow">Privacy</p>
+      <h1>A short privacy note.</h1>
+      <p class="lede">
+        This page is about the website. The CLI’s data handling is documented in the
+        repository, because it belongs next to the code that implements it.
+      </p>
+      <p class="page-meta">Last updated: 6 November 2026</p>
+    </div>
+  </section>
+
+  <section class="section page-content">
+    <div class="container prose">
+      <h2>Website analytics</h2>
+      <p>
+        When analytics is enabled, this site uses
+        <a href="https://plausible.io/privacy-focused-web-analytics" target="_blank" rel="noopener noreferrer">Plausible</a>,
+        a privacy-focused analytics service. It records aggregate page views and
+        referrers without cookies, without fingerprinting and without cross-site
+        tracking. The site does not run advertising or third-party tracking scripts.
+      </p>
+      <p>
+        The site also links to GitHub. Following a link is a request to GitHub, and
+        GitHub’s own privacy policy applies from that point.
+      </p>
+
+      <h2>The Sutra CLI</h2>
+      <p>
+        Sutra runs on your machine. Sessions, messages, tool calls, plans and usage are
+        stored locally in SQLite under <code>~/.sutra/</code>. The CLI does not push,
+        publish or deploy on its own.
+      </p>
+      <p>
+        When you use a cloud model, the content the agent reads is sent to the model
+        provider you configured. With a local model, inference stays on your machine.
+        Read the
+        <a href={`${SITE.repo}/blob/main/docs/security.md`} target="_blank" rel="noopener noreferrer">security model</a>
+        for what is blocked, what is redacted, and what the sandbox does not cover.
+      </p>
+
+      <h2>No accounts, no forms</h2>
+      <p>
+        This website has no account system, newsletter, comment section or contact form.
+        Project discussions happen on
+        <a href={SITE.issues} target="_blank" rel="noopener noreferrer">GitHub Issues</a>.
+      </p>
+
+      <h2>Questions</h2>
+      <p>
+        If something here is unclear, open an issue in the
+        <a href={SITE.repo} target="_blank" rel="noopener noreferrer">repository</a>.
+        Security problems should be reported privately, as described in
+        <a href={`${SITE.repo}/blob/main/CONTRIBUTING.md`} target="_blank" rel="noopener noreferrer">CONTRIBUTING.md</a>.
+      </p>
+
+      <p class="prose-back">
+        <a class="text-link" href="/">← Back to Sutra</a>
+      </p>
+    </div>
+  </section>
+</BaseLayout>
