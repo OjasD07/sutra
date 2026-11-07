@@ -1,16 +1,11 @@
 # Netlify configuration for the Sutra website.
 #
-# Create a Netlify site from the repository, then set the base directory to
-# "sutra-website" in Site configuration → Build & deploy. Netlify reads this
-# file from that directory.
+# This is a plain static site: point Netlify at this folder as the base
+# directory and leave the build command empty. No npm install is needed.
+# Netlify reads this file from the base directory.
 
 [build]
-  command = "npm run build"
-  publish = "dist"
-
-[build.environment]
-  NODE_VERSION = "24"
-  NPM_FLAGS = "--no-audit --no-fund"
+  publish = "."
 
 # Redirects that make the site easy to share.
 [[redirects]]
@@ -49,7 +44,7 @@
     Cross-Origin-Opener-Policy = "same-origin"
 
 [[headers]]
-  for = "/_astro/*"
+  for = "/fonts/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
@@ -64,6 +59,21 @@
     Cache-Control = "public, max-age=604800"
 
 [[headers]]
+  for = "/apple-touch-icon.png"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"
+
+[[headers]]
   for = "/favicon.svg"
   [headers.values]
     Cache-Control = "public, max-age=604800"
+
+[[headers]]
+  for = "/styles.css"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/site.js"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"

@@ -3,59 +3,81 @@
 The landing page for [Sutra](https://github.com/cneuralnetwork/sutra), the
 open-source AI coding agent for the terminal.
 
-It is a small, static Astro site. Everything lives in this folder and the site
-does not change the CLI, its build or its package.
+This is a plain static site: HTML, CSS and JavaScript only. There is no build
+step, no package install and no framework. The folder itself is the document
+root, so a host can serve it as-is.
 
 The page explains what Sutra is, shows an example session and the project's
 measured benchmark results, and sends visitors to the repository to download it.
 The full documentation stays in the repository's [`docs/`](../docs) folder.
 
-## Run locally
+## Preview locally
+
+Serve this folder with any static file server:
 
 ```bash
 cd sutra-website
-npm install
-npm run dev
+python3 -m http.server 4321
+# open http://localhost:4321
 ```
 
-You need Node.js 22.23.4 or newer (the minimum for Astro 7). The site runs at
-`http://localhost:4321`.
+Node users can run `npx serve .` instead. Opening `index.html` directly from the
+filesystem mostly works, but a local server is closer to production (absolute
+paths such as `/styles.css`).
 
-```bash
-npm run build    # static output in dist/
-npm run preview  # preview the production build
-npm run check    # Astro and TypeScript checks
-```
+## Deploy
 
-## Deploy to Netlify
+Point the host at this folder. Nothing needs to be compiled or installed.
+
+### Netlify
 
 1. Create a new Netlify site from the repository.
 2. Set **Base directory** to `sutra-website`.
-3. Leave the build command and publish directory as configured in
-   [`netlify.toml`](netlify.toml): `npm run build` and `dist`.
-4. Set `SITE_URL` in **Site configuration → Environment variables** to the
-   production origin, for example `https://sutra.dev` (no trailing slash).
-5. Deploy.
+3. Leave the **Build command** empty.
+4. Deploy. [`netlify.toml`](netlify.toml) sets the publish directory to `.`,
+   adds the share redirects (`/github`, `/download`, `/docs`) and sends basic
+   security and cache headers.
 
-`SITE_URL` is used for canonical URLs, Open Graph tags and the sitemap. Without
-it, the site falls back to `https://sutra-agent.netlify.app`.
+Do not set the publish directory to `dist`; there is no build output.
 
-The included redirects also make `/github`, `/download` and `/docs` useful short
-links.
+### Vercel
+
+1. Import the repository in Vercel.
+2. Set **Root Directory** to `sutra-website`.
+3. Choose **Framework Preset: Other**.
+4. Leave the build command empty and the output directory as `.`.
+5. Deploy. [`vercel.json`](vercel.json) adds the same security and cache headers.
+
+### Any other static host
+
+Set the document root (publish directory) to `sutra-website` and upload the
+folder's contents. No server-side runtime is required.
+
+## Custom domain
+
+Canonical URLs, Open Graph URLs, `robots.txt` and `sitemap.xml` currently use
+the placeholder `https://sutra-agent.netlify.app`. To use a custom domain,
+replace every occurrence of that origin in:
+
+- `index.html`
+- `privacy/index.html`
+- `404.html`
+- `robots.txt`
+- `sitemap.xml`
+
+Internal links and asset paths are root-relative (`/styles.css`, `/brand/...`),
+so they keep working on any domain.
 
 ## Analytics
 
-The site supports [Plausible](https://plausible.io), a privacy-friendly
-analytics service with no cookies or cross-site tracking. It is off by default.
+Analytics is off by default. To enable [Plausible](https://plausible.io), set
+`PLAUSIBLE_DOMAIN` near the top of [`site.js`](site.js), for example:
 
-Set these Netlify environment variables to turn it on:
+```js
+const PLAUSIBLE_DOMAIN = 'sutra.dev';
+```
 
-| Variable | Purpose |
-| --- | --- |
-| `PUBLIC_PLAUSIBLE_DOMAIN` | The domain configured in Plausible, for example `sutra.dev`. Analytics loads only when this is set. |
-| `PUBLIC_PLAUSIBLE_SCRIPT_URL` | Optional. The script URL for a self-hosted Plausible instance. Defaults to `https://plausible.io/js/script.js`. |
-
-The following conversion events are sent when analytics is enabled:
+`site.js` then loads the Plausible script and sends these conversion events:
 
 - `download-header`
 - `download-mobile`
@@ -65,21 +87,20 @@ The following conversion events are sent when analytics is enabled:
 - `readme-cta`
 - `github-header`
 
-Netlify Analytics can also be enabled in the Netlify dashboard. It is
-server-side and needs no site code.
+For a self-hosted Plausible instance, also set `PLAUSIBLE_SCRIPT_URL`.
+Plausible records aggregate page views without cookies or cross-site tracking.
 
 ## SEO
 
-The site includes:
+The static pages include:
 
 - Per-page titles, descriptions, canonical URLs and robots directives.
-- Open Graph and Twitter Card metadata, using `assets/github-social-card.png`.
+- Open Graph and Twitter Card metadata, using `og.png`.
 - `SoftwareApplication`, `WebSite` and `FAQPage` structured data on the landing
-  page.
-- A generated sitemap via `@astrojs/sitemap`.
-- `robots.txt` with the sitemap location.
+  page, and `WebPage` on the privacy page.
+- A hand-maintained `sitemap.xml` and a `robots.txt` that points to it.
 - A web app manifest and SVG/PNG icons.
-- Semantic headings, a skip link, reduced-motion support and a 404 page.
+- Semantic headings, a skip link, reduced-motion support and a `404.html` page.
 
 ## Theme
 
@@ -97,23 +118,36 @@ The palette follows [`docs/brand.md`](../docs/brand.md) and the README banner:
 
 The site defaults to the system theme and has a dark/light toggle. Typography is
 Inter for text, JetBrains Mono for code, and Noto Sans Devanagari for सूत्र.
+The font files are vendored in `fonts/` under their original OFL licences, so
+the page makes no third-party font requests.
 
-Brand assets in `public/brand/` are copied from the repository's
-[`assets/`](../assets) folder. If the brand changes, update the copies here too.
+Brand assets in `brand/` are copied from the repository's [`assets/`](../assets)
+folder. If the brand changes, update the copies here too.
 
 ## Structure
 
 ```
-src/
-  components/   header, footer, session card, terminal example, icons, SEO
-  layouts/      base document
-  lib/          site metadata and links
-  pages/        landing page, privacy, 404, robots.txt
-  scripts/      theme toggle, navigation, copy buttons, reveal, events
-  styles/       the full theme and responsive layout
-public/         icons, social card, manifest
-netlify.toml    build, redirects and security headers
+index.html          landing page
+privacy/index.html  privacy note
+404.html            not-found page
+styles.css          the full theme and responsive layout
+site.js             theme toggle, navigation, copy buttons, reveal, analytics
+sitemap.xml         the two indexable pages
+robots.txt          crawler rules and sitemap location
+fonts/              vendored Inter, JetBrains Mono and Noto Sans Devanagari
+brand/              logo, banner and social-card assets
+netlify.toml        static publish, redirects, security and cache headers
+vercel.json         security and cache headers
 ```
+
+## Editing
+
+- Page copy and links: edit the HTML files directly.
+- Colours, spacing and layout: edit `styles.css`.
+- Behaviour: edit `site.js`.
+
+There is no generated markup or minification step, so what you edit is what the
+host serves.
 
 ## License
 

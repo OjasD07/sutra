@@ -1,19 +1,15 @@
-declare global {
-  interface Window {
-    plausible?: (
-      event: string,
-      options?: { props?: Record<string, string | number | boolean> },
-    ) => void;
-  }
-}
+/* Sutra website: theme, navigation, copy buttons, reveal, analytics. */
 
-export {};
+/* Set this to your Plausible domain, for example 'sutra.dev', to enable
+   privacy-friendly analytics. Leave it empty to load no third-party script. */
+const PLAUSIBLE_DOMAIN = '';
+const PLAUSIBLE_SCRIPT_URL = 'https://plausible.io/js/script.js';
 
 const root = document.documentElement;
-const themeToggle = document.querySelector<HTMLButtonElement>('[data-theme-toggle]');
+const themeToggle = document.querySelector('[data-theme-toggle]');
 const themeQuery = window.matchMedia('(prefers-color-scheme: light)');
 
-function storedTheme(): 'dark' | 'light' | null {
+function storedTheme() {
   try {
     const value = localStorage.getItem('sutra-theme');
     return value === 'dark' || value === 'light' ? value : null;
@@ -22,13 +18,13 @@ function storedTheme(): 'dark' | 'light' | null {
   }
 }
 
-function syncThemeButton(): void {
+function syncThemeButton() {
   if (!themeToggle) return;
   const isDark = root.dataset.theme !== 'light';
   themeToggle.setAttribute('aria-label', isDark ? 'Switch to light theme' : 'Switch to dark theme');
 }
 
-function setTheme(theme: 'dark' | 'light', persist: boolean): void {
+function setTheme(theme, persist) {
   root.dataset.theme = theme;
   if (persist) {
     try {
@@ -53,10 +49,10 @@ themeQuery.addEventListener('change', (event) => {
 
 /* Header state and mobile navigation. */
 
-const header = document.querySelector<HTMLElement>('[data-site-header]');
-const navToggle = document.querySelector<HTMLButtonElement>('[data-nav-toggle]');
+const header = document.querySelector('[data-site-header]');
+const navToggle = document.querySelector('[data-nav-toggle]');
 
-function setNavOpen(open: boolean): void {
+function setNavOpen(open) {
   if (!header || !navToggle) return;
   header.classList.toggle('nav-open', open);
   navToggle.setAttribute('aria-expanded', String(open));
@@ -67,7 +63,7 @@ navToggle?.addEventListener('click', () => {
   setNavOpen(!header?.classList.contains('nav-open'));
 });
 
-document.querySelectorAll<HTMLAnchorElement>('[data-nav-link]').forEach((link) => {
+document.querySelectorAll('[data-nav-link]').forEach((link) => {
   link.addEventListener('click', () => setNavOpen(false));
 });
 
@@ -85,16 +81,21 @@ window.addEventListener('resize', () => {
   if (window.innerWidth > 900) setNavOpen(false);
 });
 
-function syncHeader(): void {
+function syncHeader() {
   header?.classList.toggle('is-scrolled', window.scrollY > 8);
 }
 
 syncHeader();
 window.addEventListener('scroll', syncHeader, { passive: true });
 
+/* Keep the footer year current without a build step. */
+document.querySelectorAll('[data-year]').forEach((el) => {
+  el.textContent = String(new Date().getFullYear());
+});
+
 /* Copy-to-clipboard buttons. */
 
-async function copyText(text: string): Promise<boolean> {
+async function copyText(text) {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -120,8 +121,8 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((button) => {
-  const label = button.querySelector<HTMLElement>('[data-copy-label]');
+document.querySelectorAll('[data-copy]').forEach((button) => {
+  const label = button.querySelector('[data-copy-label]');
   const original = label?.textContent ?? 'Copy';
 
   button.addEventListener('click', async () => {
@@ -141,7 +142,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((button) => 
 
 /* Reveal elements as they enter the viewport. */
 
-const revealItems = Array.from(document.querySelectorAll<HTMLElement>('.reveal'));
+const revealItems = Array.from(document.querySelectorAll('.reveal'));
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 if (reducedMotion || !('IntersectionObserver' in window)) {
@@ -165,7 +166,7 @@ if (reducedMotion || !('IntersectionObserver' in window)) {
 
 document.addEventListener('click', (event) => {
   if (!(event.target instanceof Element)) return;
-  const target = event.target.closest<HTMLElement>('[data-analytics]');
+  const target = event.target.closest('[data-analytics]');
   if (!target) return;
 
   const eventName = target.dataset.analytics;
@@ -175,3 +176,18 @@ document.addEventListener('click', (event) => {
     props: { page: window.location.pathname },
   });
 });
+
+/* Analytics stays off unless a domain is configured above. */
+if (PLAUSIBLE_DOMAIN) {
+  window.plausible =
+    window.plausible ||
+    function () {
+      (window.plausible.q = window.plausible.q || []).push(arguments);
+    };
+
+  const script = document.createElement('script');
+  script.defer = true;
+  script.dataset.domain = PLAUSIBLE_DOMAIN;
+  script.src = PLAUSIBLE_SCRIPT_URL;
+  document.head.append(script);
+}
