@@ -50,6 +50,49 @@ export const EndpointSchema = z.object({
 });
 export type EndpointConfig = z.infer<typeof EndpointSchema>;
 
+/**
+ * One user-configured MCP server. `command` selects a local stdio server;
+ * `url` selects a remote Streamable HTTP server. There is deliberately no
+ * project-level equivalent: a repository must never be able to launch a
+ * process or send your data to a server you did not configure.
+ */
+export const McpServerSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Inferred from `url` / `command` when omitted. */
+    type: z.enum(["stdio", "http"]).optional(),
+    /** stdio: executable to spawn. */
+    command: z.string().min(1).optional(),
+    args: z.array(z.string()).default([]),
+    /** stdio: environment variables for the server. Never inherited implicitly. */
+    env: z.record(z.string(), z.string()).default({}),
+    /** stdio: names of parent environment variables to copy explicitly (for example ["GITHUB_TOKEN"]). */
+    inheritEnv: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default([]),
+    cwd: z.string().min(1).optional(),
+    /** http: endpoint speaking Streamable HTTP. */
+    url: z.string().url().optional(),
+    /** http: extra request headers, for example {"Authorization":"Bearer …"}. */
+    headers: z.record(z.string(), z.string()).default({}),
+    /** Initialization and tools/list timeout. */
+    connectTimeoutMs: z.number().int().positive().max(300_000).default(20_000),
+    /** Per-call timeout. */
+    toolTimeoutMs: z.number().int().positive().max(3_600_000).default(120_000),
+  })
+  .superRefine((v, ctx) => {
+    const transport = v.type ?? (v.url ? "http" : "stdio");
+    if (transport === "stdio") {
+      if (!v.command) ctx.addIssue({ code: "custom", message: "stdio MCP server requires `command`" });
+      if (v.url) ctx.addIssue({ code: "custom", message: "stdio MCP server cannot also set `url`" });
+    } else {
+      if (!v.url) ctx.addIssue({ code: "custom", message: "http MCP server requires `url`" });
+      if (v.command) ctx.addIssue({ code: "custom", message: "http MCP server cannot also set `command`" });
+    }
+  });
+export type McpServerConfig = z.infer<typeof McpServerSchema>;
+
+/** Server names become part of tool names, so keep them short and provider-safe. */
+const MCP_SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+
 export const ConfigSchema = z.object({
   provider: z.string().default("deepseek"),
   model: z.string().optional(),
@@ -207,6 +250,19 @@ export const ConfigSchema = z.object({
       scrubEnv: z.boolean().default(true),
     })
     .prefault({}),
+  /**
+   * Model Context Protocol servers. User config only (never `.sutra/config.json`).
+   * Tools are exposed as `mcp_<server>_<tool>` and always ask before running.
+   */
+  mcpServers: z
+    .record(z.string(), McpServerSchema)
+    .default({})
+    .superRefine((servers, ctx) => {
+      for (const name of Object.keys(servers)) {
+        if (!MCP_SERVER_NAME.test(name))
+          ctx.addIssue({ code: "custom", path: [name], message: "MCP server names must be 1-32 characters: letters, digits, `_` or `-`, starting with a letter or digit" });
+      }
+    }),
   ui: z
     .object({
       theme: z.enum(["auto", "dark", "light"]).default("auto"),

@@ -502,7 +502,7 @@ export class AgentRuntime {
       return;
     }
     p.summary = req.summary;
-    if (this.mode === "plan" && (tool.category === "write" || tool.category === "execute")) {
+    if (this.mode === "plan" && (tool.category === "write" || tool.category === "execute" || tool.category === "mcp")) {
       p.outcome = "denied";
       p.deniedBy = "policy";
       p.result = fail("permission_denied", "Plan mode: nothing may be changed or run until the user approves the plan. Record the step in update_plan instead.");
