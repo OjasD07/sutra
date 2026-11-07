@@ -53,20 +53,15 @@ Do not set the publish directory to `dist`; there is no build output.
 Set the document root (publish directory) to `sutra-website` and upload the
 folder's contents. No server-side runtime is required.
 
-## Custom domain
+## Domain configuration
 
-Canonical URLs, Open Graph URLs, `robots.txt` and `sitemap.xml` currently use
-the placeholder `https://sutra-agent.netlify.app`. To use a custom domain,
-replace every occurrence of that origin in:
+The site uses root-relative paths for all assets (`/styles.css`, `/og.png`, `/fonts/...`),
+so it works on any domain without changes. When you deploy to a domain:
 
-- `index.html`
-- `privacy/index.html`
-- `404.html`
-- `robots.txt`
-- `sitemap.xml`
-
-Internal links and asset paths are root-relative (`/styles.css`, `/brand/...`),
-so they keep working on any domain.
+1. The Open Graph and Twitter images use `/og.png` (root-relative).
+2. No canonical URLs are set — add `<link rel="canonical" href="https://your-domain.com/">` to each page if desired.
+3. Update `robots.txt` with your sitemap URL if you create one.
+4. For structured data, you may add `"url": "https://your-domain.com/"` to the `WebSite` and `SoftwareApplication` objects.
 
 ## Analytics
 

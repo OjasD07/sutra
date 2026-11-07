@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://sutra-agent.netlify.app/sitemap.xml
+# Add your sitemap URL here when domain is confirmed:
+# Sitemap: https://your-domain.com/sitemap.xml

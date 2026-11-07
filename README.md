@@ -489,7 +489,8 @@ What to know before relying on it:
 The landing page lives in [sutra-website/](sutra-website/). It is a plain HTML,
 CSS and JavaScript site with no build step; see
 [its README](sutra-website/README.md) for local preview and Netlify or Vercel
-deployment.
+deployment. The site uses root-relative asset paths and works on any domain
+without modification — just point your host at the `sutra-website/` folder.
 
 ## Contributing
 
