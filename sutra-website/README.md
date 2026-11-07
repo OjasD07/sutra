@@ -144,6 +144,22 @@ vercel.json         security and cache headers
 There is no generated markup or minification step, so what you edit is what the
 host serves.
 
+## Contributors
+
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%">
+        <a href="https://github.com/OjasD07">
+          <img src="https://github.com/ojasd07.png?size=100" width="80px;" alt="Ojas Deshpande"/><br />
+          <sub><b>Ojas Deshpande</b></sub>
+        </a><br />
+        <sub>@OjasD07</sub>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
 ## License
 
 The website is part of Sutra and is released under the Apache License 2.0.
