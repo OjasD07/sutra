@@ -50,6 +50,10 @@ export const EndpointSchema = z.object({
 });
 export type EndpointConfig = z.infer<typeof EndpointSchema>;
 
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** RFC 9110 field-name. */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
 /**
  * One user-configured MCP server. `command` selects a local stdio server;
  * `url` selects a remote Streamable HTTP server. There is deliberately no
@@ -65,14 +69,21 @@ export const McpServerSchema = z
     command: z.string().min(1).optional(),
     args: z.array(z.string()).default([]),
     /** stdio: environment variables for the server. Never inherited implicitly. */
-    env: z.record(z.string(), z.string()).default({}),
+    env: z
+      .record(z.string().regex(ENV_NAME, "Environment variable names must match [A-Za-z_][A-Za-z0-9_]*"), z.string())
+      .default({}),
     /** stdio: names of parent environment variables to copy explicitly (for example ["GITHUB_TOKEN"]). */
-    inheritEnv: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default([]),
+    inheritEnv: z.array(z.string().regex(ENV_NAME, "Environment variable names must match [A-Za-z_][A-Za-z0-9_]*")).default([]),
     cwd: z.string().min(1).optional(),
     /** http: endpoint speaking Streamable HTTP. */
     url: z.string().url().optional(),
     /** http: extra request headers, for example {"Authorization":"Bearer …"}. */
-    headers: z.record(z.string(), z.string()).default({}),
+    headers: z
+      .record(
+        z.string().regex(HEADER_NAME, "Invalid HTTP header name"),
+        z.string().refine((v) => !/[\r\n]/.test(v), "HTTP header values cannot contain newlines"),
+      )
+      .default({}),
     /** Initialization and tools/list timeout. */
     connectTimeoutMs: z.number().int().positive().max(300_000).default(20_000),
     /** Per-call timeout. */
@@ -83,9 +94,27 @@ export const McpServerSchema = z
     if (transport === "stdio") {
       if (!v.command) ctx.addIssue({ code: "custom", message: "stdio MCP server requires `command`" });
       if (v.url) ctx.addIssue({ code: "custom", message: "stdio MCP server cannot also set `url`" });
+      if (Object.keys(v.headers).length)
+        ctx.addIssue({ code: "custom", path: ["headers"], message: "stdio MCP server cannot set `headers`; use `env` or `inheritEnv`" });
     } else {
-      if (!v.url) ctx.addIssue({ code: "custom", message: "http MCP server requires `url`" });
+      if (!v.url) {
+        ctx.addIssue({ code: "custom", message: "http MCP server requires `url`" });
+      } else {
+        try {
+          const url = new URL(v.url);
+          if (url.protocol !== "http:" && url.protocol !== "https:")
+            ctx.addIssue({ code: "custom", path: ["url"], message: "http MCP server URL must use http:// or https://" });
+          if (url.username || url.password)
+            ctx.addIssue({ code: "custom", path: ["url"], message: "http MCP server URL must not embed credentials; use `headers` instead" });
+        } catch {
+          /* z.string().url() already rejected malformed URLs. */
+        }
+      }
       if (v.command) ctx.addIssue({ code: "custom", message: "http MCP server cannot also set `command`" });
+      if (v.args.length) ctx.addIssue({ code: "custom", path: ["args"], message: "http MCP server cannot set `args`" });
+      if (Object.keys(v.env).length || v.inheritEnv.length)
+        ctx.addIssue({ code: "custom", path: ["env"], message: "http MCP server cannot set `env` or `inheritEnv`; use `headers`" });
+      if (v.cwd) ctx.addIssue({ code: "custom", path: ["cwd"], message: "http MCP server cannot set `cwd`" });
     }
   });
 export type McpServerConfig = z.infer<typeof McpServerSchema>;

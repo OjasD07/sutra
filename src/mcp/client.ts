@@ -15,6 +15,7 @@ import { version } from "../version.js";
 
 const MAX_LIST_PAGES = 20;
 const MAX_TOOLS_PER_SERVER = 200;
+const MAX_DESCRIPTION_CHARS = 4_000;
 
 export interface ConnectedMcpServer {
   name: string;
@@ -122,6 +123,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** Strip terminal escape sequences and control characters from server-controlled text. */
+function sanitizeText(text: string): string {
+  return text
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, " ")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, " ")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, " ");
+}
+
 /**
  * Format an MCP `CallToolResult` as plain text for the model. Non-text items
  * are represented explicitly so nothing happens silently; the runtime applies
@@ -211,16 +220,26 @@ export function createMcpToolAdapter(opts: {
   remote: McpToolDefinition;
   client: McpToolCallClient;
   timeoutMs: number;
+  /** Applied to server-controlled text before it reaches the model, UI or logs. */
+  redact?: (text: string) => string;
 }): Tool<Record<string, unknown>> {
   const { server, transport, localName, remote, client, timeoutMs } = opts;
+  const redact = opts.redact ?? ((text: string) => text);
   const { parameters, schema } = compileMcpInputSchema(remote.inputSchema);
-  const title = remote.annotations?.title ?? remote.title;
-  const descBody = remote.description?.trim() || title?.trim() || `Tool "${remote.name}" on MCP server "${server}".`;
+  const displayName = sanitizeText(redact(remote.name));
+  const rawTitle = remote.annotations?.title ?? remote.title;
+  const title = rawTitle ? oneLine(sanitizeText(redact(rawTitle)), 100) : undefined;
+  // A server controls its own description, so redact known secrets, strip
+  // terminal escapes and cap the size before it becomes part of every request.
+  const descBody = truncateMiddle(
+    sanitizeText(redact(remote.description?.trim() || rawTitle?.trim() || `Tool "${remote.name}" on MCP server "${server}".`)),
+    MAX_DESCRIPTION_CHARS,
+  ).text;
   const destructive = remote.annotations?.destructiveHint === true;
 
   return {
     name: localName,
-    description: `[MCP ${server} · ${remote.name}] ${descBody}`,
+    description: `[MCP ${server} · ${displayName}] ${descBody}`,
     version: "1.0.0",
     schema,
     parameters,
@@ -230,42 +249,43 @@ export function createMcpToolAdapter(opts: {
     readOnly: false,
     timeoutMs,
     describe(args: Record<string, unknown>, ctx: ToolContext) {
-      const argText = ctx.redactor.redact(summarizeArgs(args));
+      const argText = sanitizeText(ctx.redactor.redact(summarizeArgs(args)));
       return {
         tool: localName,
         category: "mcp",
-        summary: `${server}/${remote.name}${argText ? ` ${argText}` : ""}`,
+        summary: `${server}/${displayName}${argText ? ` ${argText}` : ""}`,
         ...(destructive ? { destructive: true } : {}),
       };
     },
     async preview(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolPreview> {
-      const details = [`Server: ${server} (${transport})`, `Tool:   ${remote.name}`];
-      if (title && title !== remote.name) details.push(`Title:  ${ oneLine(title, 100) }`);
+      const details = [`Server: ${server} (${transport})`, `Tool:   ${displayName}`];
+      if (title && title !== displayName) details.push(`Title:  ${title}`);
       const keys = Object.keys(args);
       if (keys.length === 0) {
         details.push("Args:   {}");
       } else {
-        const pretty = ctx.redactor.redact(safeJson(args));
+        const pretty = sanitizeText(ctx.redactor.redact(safeJson(args)));
         for (const line of truncateMiddle(pretty, 600).text.split("\n").slice(0, 12)) {
           details.push(`        ${line}`);
         }
       }
-      return { summary: `${server}/${remote.name}`, details };
+      return { summary: `${server}/${displayName}`, details };
     },
     async execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
       try {
         const res = await client.callTool(remote.name, args, ctx.signal, timeoutMs);
         const { output, isError } = formatMcpCallResult(res);
+        const safeOutput = sanitizeText(redact(output));
         const data = { mcpServer: server, mcpTool: remote.name };
-        if (isError) return fail("execution_failed", output, { data });
-        return ok(output, data);
+        if (isError) return fail("execution_failed", safeOutput, { data });
+        return ok(safeOutput, data);
       } catch (err) {
         if (ctx.signal.aborted) return fail("cancelled", "Cancelled by user");
         if (err instanceof McpError && err.code === ErrorCode.RequestTimeout) {
-          return fail("timeout", `MCP tool ${server}/${remote.name} timed out after ${timeoutMs} ms`, { retryable: true });
+          return fail("timeout", sanitizeText(redact(`MCP tool ${server}/${remote.name} timed out after ${timeoutMs} ms`)), { retryable: true });
         }
         const msg = err instanceof Error ? err.message : String(err);
-        return fail("execution_failed", `MCP ${server}/${remote.name} failed: ${msg}`);
+        return fail("execution_failed", sanitizeText(redact(`MCP ${server}/${remote.name} failed: ${msg}`)));
       }
     },
   };
@@ -288,6 +308,43 @@ function summarizeArgs(args: Record<string, unknown>): string {
  * produces a warning instead of aborting startup so one offline server does not
  * block local work.
  */
+interface ServerSetup {
+  name: string;
+  transport: "stdio" | "http";
+  tools: McpToolDefinition[];
+  truncated: boolean;
+  toolTimeoutMs: number;
+  serverVersion?: { name: string; version: string };
+  callClient: McpToolCallClient;
+  close(): Promise<void>;
+}
+
+type ServerResult = { ok: true; setup: ServerSetup } | { ok: false; warning: string };
+
+async function discoverTools(
+  client: Client,
+  connectTimeoutMs: number,
+): Promise<{ tools: McpToolDefinition[]; truncated: boolean }> {
+  const discovered: McpToolDefinition[] = [];
+  let cursor: string | undefined;
+  let truncated = false;
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const res = await client.listTools(cursor ? { cursor } : undefined, { timeout: connectTimeoutMs });
+    for (const tool of res.tools) {
+      if (discovered.length >= MAX_TOOLS_PER_SERVER) {
+        truncated = true;
+        break;
+      }
+      discovered.push(tool);
+    }
+    if (truncated) break;
+    if (!res.nextCursor) break;
+    cursor = res.nextCursor;
+    if (page === MAX_LIST_PAGES - 1) truncated = true;
+  }
+  return { tools: discovered, truncated };
+}
+
 export async function connectMcpServers(
   config: SutraConfig,
   workspaceRoot: string,
@@ -311,9 +368,10 @@ export async function connectMcpServers(
   const env = opts.env ?? process.env;
   const redactor = new SecretRedactor();
   for (const secret of collectMcpSecrets(config, env)) redactor.add(secret);
+  const redact = (text: string) => redactor.redact(text);
 
-  await Promise.all(
-    entries.map(async ([name, serverCfg]) => {
+  const results = await Promise.all(
+    entries.map(async ([name, serverCfg]): Promise<ServerResult> => {
       let transport: Transport | undefined;
       let client: Client | undefined;
       let errorContext = () => "";
@@ -324,29 +382,7 @@ export async function connectMcpServers(
         client = new Client({ name: "sutra", version: version() });
         await client.connect(transport, { timeout: serverCfg.connectTimeoutMs });
 
-        const discovered: McpToolDefinition[] = [];
-        let cursor: string | undefined;
-        let truncated = false;
-        for (let page = 0; page < MAX_LIST_PAGES; page++) {
-          const res = await client.listTools(cursor ? { cursor } : undefined, { timeout: serverCfg.connectTimeoutMs });
-          for (const tool of res.tools) {
-            if (discovered.length >= MAX_TOOLS_PER_SERVER) {
-              truncated = true;
-              break;
-            }
-            discovered.push(tool);
-          }
-          if (truncated) break;
-          if (!res.nextCursor) break;
-          cursor = res.nextCursor;
-          if (page === MAX_LIST_PAGES - 1) truncated = true;
-        }
-        if (truncated) {
-          warnings.push(
-            `MCP server "${name}" advertised more than ${MAX_TOOLS_PER_SERVER} tools or ${MAX_LIST_PAGES} pages; only the first ${discovered.length} were loaded.`,
-          );
-        }
-
+        const discovered = await discoverTools(client, serverCfg.connectTimeoutMs);
         const connectedClient = client;
         const callClient: McpToolCallClient = {
           async callTool(remoteName, args, signal, timeoutMs) {
@@ -357,29 +393,7 @@ export async function connectMcpServers(
             )) as Record<string, unknown>;
           },
         };
-
-        for (const remote of discovered) {
-          const localName = buildMcpToolName(name, remote.name, taken);
-          taken.add(localName);
-          tools.push(
-            createMcpToolAdapter({
-              server: name,
-              transport: created.kind,
-              localName,
-              remote,
-              client: callClient,
-              timeoutMs: serverCfg.toolTimeoutMs,
-            }),
-          );
-        }
-
         const sv = client.getServerVersion();
-        servers.push({
-          name,
-          transport: created.kind,
-          ...(sv ? { serverVersion: { name: sv.name, version: sv.version } } : {}),
-          toolCount: discovered.length,
-        });
         const closeOne = async () => {
           try {
             await connectedClient.close();
@@ -391,14 +405,25 @@ export async function connectMcpServers(
             }
           }
         };
-        closers.push(closeOne);
-        log().info({ mcpServer: name, transport: created.kind, tools: discovered.length }, "mcp connected");
+        log().info({ mcpServer: name, transport: created.kind, tools: discovered.tools.length }, "mcp connected");
+        return {
+          ok: true,
+          setup: {
+            name,
+            transport: created.kind,
+            tools: discovered.tools,
+            truncated: discovered.truncated,
+            toolTimeoutMs: serverCfg.toolTimeoutMs,
+            ...(sv ? { serverVersion: { name: sv.name, version: sv.version } } : {}),
+            callClient,
+            close: closeOne,
+          },
+        };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const detail = [msg, errorContext()].filter(Boolean).join("\n");
-        const warning = redactor.redact(`MCP server "${name}" unavailable: ${oneLine(detail, 400)}`);
-        warnings.push(warning);
-        log().warn({ mcpServer: name, err: redactor.redact(detail) }, "mcp connect failed");
+        const warning = sanitizeText(redact(`MCP server "${name}" unavailable: ${oneLine(detail, 400)}`));
+        log().warn({ mcpServer: name, err: sanitizeText(redact(detail)) }, "mcp connect failed");
         try {
           await client?.close();
         } catch {
@@ -409,13 +434,49 @@ export async function connectMcpServers(
         } catch {
           /* ignore */
         }
+        return { ok: false, warning };
       }
     }),
   );
 
-  // Deterministic order regardless of connection timing.
-  const order = new Map(entries.map(([n], i) => [n, i]));
-  servers.sort((a, b) => (order.get(a.name) ?? 0) - (order.get(b.name) ?? 0));
+  // Name tools and collect warnings sequentially, in config order. Assigning
+  // names inside the concurrent connection tasks would make collisions (long
+  // server names truncate to the same prefix) depend on connection timing.
+  for (const result of results) {
+    if (!result.ok) {
+      warnings.push(result.warning);
+      continue;
+    }
+    const setup = result.setup;
+    if (setup.truncated) {
+      warnings.push(
+        `MCP server "${setup.name}" advertised more than ${MAX_TOOLS_PER_SERVER} tools or ${MAX_LIST_PAGES} pages; only the first ${setup.tools.length} were loaded.`,
+      );
+    }
+    for (const remote of setup.tools) {
+      const localName = buildMcpToolName(setup.name, redact(remote.name), taken);
+      taken.add(localName);
+      tools.push(
+        createMcpToolAdapter({
+          server: setup.name,
+          transport: setup.transport,
+          localName,
+          remote,
+          client: setup.callClient,
+          timeoutMs: setup.toolTimeoutMs,
+          redact,
+        }),
+      );
+    }
+    servers.push({
+      name: setup.name,
+      transport: setup.transport,
+      ...(setup.serverVersion ? { serverVersion: setup.serverVersion } : {}),
+      toolCount: setup.tools.length,
+    });
+    closers.push(setup.close);
+  }
+
   tools.sort((a, b) => a.name.localeCompare(b.name));
 
   let closed = false;
@@ -488,7 +549,12 @@ export function collectMcpSecrets(config: SutraConfig, env: NodeJS.ProcessEnv = 
     }
     if (server.url) {
       try {
-        for (const [k, v] of new URL(server.url).searchParams) {
+        const url = new URL(server.url);
+        // URLs with embedded credentials are rejected by config validation, but
+        // callers can construct a config programmatically. Redact them anyway.
+        if (url.username) out.push(decodeUrlPart(url.username));
+        if (url.password) out.push(decodeUrlPart(url.password));
+        for (const [k, v] of url.searchParams) {
           if (v && /(token|key|secret|auth|password|cookie)/i.test(k)) out.push(v);
         }
       } catch {
@@ -497,4 +563,12 @@ export function collectMcpSecrets(config: SutraConfig, env: NodeJS.ProcessEnv = 
     }
   }
   return out;
+}
+
+function decodeUrlPart(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

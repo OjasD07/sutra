@@ -1,6 +1,10 @@
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { ConfigSchema, ProjectConfigSchema } from "../../src/config/schema.js";
 import { PlanStore } from "../../src/core/planning/plan.js";
 import {
@@ -8,6 +12,7 @@ import {
   collectMcpSecrets,
   compileMcpInputSchema,
   connectMcpServers,
+  createMcpToolAdapter,
   formatMcpCallResult,
   type McpRuntime,
 } from "../../src/mcp/client.js";
@@ -50,6 +55,44 @@ function policy(profile: PermissionPolicy["profile"]): PermissionPolicy {
   return { profile, allowCommands: [], sensitivePaths: [], protectedPaths: [], routineCommands: [] };
 }
 
+/** A stateless Streamable HTTP MCP server used to exercise the remote transport. */
+async function startHttpMcpServer(): Promise<{ url: string; seenAuth: string[]; close(): Promise<void> }> {
+  const seenAuth: string[] = [];
+  const http = createServer(async (req, res) => {
+    seenAuth.push(String(req.headers.authorization ?? ""));
+    if (req.method !== "POST") {
+      res.writeHead(405).end();
+      return;
+    }
+    const server = new McpServer({ name: "sutra-http-mcp", version: "0.1.0" });
+    server.registerTool(
+      "echo_http",
+      { description: "Echo over HTTP.", inputSchema: { text: z.string() } },
+      async ({ text }) => ({ content: [{ type: "text", text: `http:${text}` }] }),
+    );
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await server.connect(transport);
+    res.on("close", () => {
+      void transport.close();
+      void server.close();
+    });
+    await transport.handleRequest(req, res);
+  });
+  await new Promise<void>((resolve, reject) => {
+    http.once("error", reject);
+    http.listen(0, "127.0.0.1", resolve);
+  });
+  const address = http.address();
+  if (!address || typeof address === "string") throw new Error("test HTTP server has no port");
+  return {
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    seenAuth,
+    async close() {
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    },
+  };
+}
+
 let mcp: McpRuntime;
 let h: Harness | undefined;
 
@@ -81,6 +124,19 @@ describe("MCP configuration", () => {
     expect(() => ConfigSchema.parse({ mcpServers: { x: { type: "http" } } })).toThrow();
     expect(() => ConfigSchema.parse({ mcpServers: { "bad name": { command: "node" } } })).toThrow(/server names/i);
     expect(() => ConfigSchema.parse({ mcpServers: { ["a".repeat(40)]: { command: "node" } } })).toThrow(/server names/i);
+    // Cross-transport settings are rejected instead of being silently ignored.
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { command: "node", headers: { Authorization: "x" } } } })).toThrow(/headers/i);
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { url: "https://example.com/mcp", env: { A: "b" } } } })).toThrow(/env/i);
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { url: "https://example.com/mcp", cwd: "." } } })).toThrow(/cwd/i);
+  });
+
+  it("rejects unsafe env, header and URL values", () => {
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { command: "node", env: { "BAD-NAME": "v" } } } })).toThrow(/Environment variable/i);
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { command: "node", inheritEnv: ["BAD-NAME"] } } })).toThrow(/Environment variable/i);
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { url: "ftp://example.com/mcp" } } })).toThrow(/http:\/\//i);
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { url: "https://user:pass@example.com/mcp" } } })).toThrow(/credentials/i);
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { url: "https://example.com/mcp", headers: { "Bad Header": "x" } } } })).toThrow(/header name/i);
+    expect(() => ConfigSchema.parse({ mcpServers: { x: { url: "https://example.com/mcp", headers: { "X-Test": "a\nb" } } } })).toThrow(/newlines/i);
   });
 
   it("is user-config only: project config strips mcpServers", () => {
@@ -149,6 +205,38 @@ describe("MCP tool naming and schemas", () => {
     expect(mixed.output).toContain("[image: image/png");
     expect(mixed.output).toContain("[resource file:///x (text/plain)]");
     expect(mixed.output).toContain('"ok": true');
+  });
+
+  it("redacts server-controlled descriptions and results", async () => {
+    const adapters: string[] = [];
+    const tool = createMcpToolAdapter({
+      server: "echo",
+      transport: "stdio",
+      localName: "mcp_echo_leak",
+      remote: {
+        name: "leak",
+        description: `description contains ${TOKEN}`,
+        inputSchema: { type: "object" as const, properties: {} },
+        annotations: { title: `title ${TOKEN}` },
+      },
+      client: {
+        async callTool() {
+          return { content: [{ type: "text", text: `output ${TOKEN}` }] };
+        },
+      },
+      timeoutMs: 1_000,
+      redact: (text) => {
+        adapters.push(text);
+        return text.split(TOKEN).join("[redacted-secret]");
+      },
+    });
+    expect(tool.description).not.toContain(TOKEN);
+    expect(tool.description).toContain("[redacted-secret]");
+    const res = await tool.execute({}, toolContext(tempDir("sutra-mcp-ws-")));
+    expect(res.ok).toBe(true);
+    expect(res.output).not.toContain(TOKEN);
+    expect(res.output).toContain("[redacted-secret]");
+    expect(adapters.length).toBeGreaterThan(0);
   });
 });
 
@@ -245,5 +333,95 @@ describe("MCP stdio server", () => {
     expect(runtime.warnings).toHaveLength(1);
     expect(runtime.warnings[0]).toContain('MCP server "missing" unavailable');
     await runtime.close();
+  });
+
+  it("assigns colliding tool names deterministically regardless of connect timing", async () => {
+    // Both server names truncate to the same 20-character prefix, so their
+    // `echo` tools share a base name.
+    const prefix = "a".repeat(20);
+    const cfg = ConfigSchema.parse({
+      mcpServers: {
+        [`${prefix}X`]: { command: process.execPath, args: [fixture] },
+        [`${prefix}Y`]: { command: process.execPath, args: [fixture] },
+      },
+    });
+    const echoNames = (runtime: McpRuntime) =>
+      runtime.tools
+        .map((t) => t.name)
+        .filter((name) => name.includes("_echo"))
+        .sort();
+    const first = await connectMcpServers(cfg, tempDir("sutra-mcp-ws-"));
+    const second = await connectMcpServers(cfg, tempDir("sutra-mcp-ws-"));
+    try {
+      expect(first.warnings).toEqual([]);
+      expect(echoNames(first)).toHaveLength(2);
+      expect(new Set(echoNames(first)).size).toBe(2);
+      expect(echoNames(second)).toEqual(echoNames(first));
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
+
+  it("connects over Streamable HTTP and sends configured headers", async () => {
+    const server = await startHttpMcpServer();
+    const runtimeConfig = ConfigSchema.parse({
+      mcpServers: {
+        remote: { type: "http", url: server.url, headers: { Authorization: `Bearer ${TOKEN}` } },
+      },
+    });
+    const runtime = await connectMcpServers(runtimeConfig, tempDir("sutra-mcp-ws-"));
+    try {
+      expect(runtime.warnings).toEqual([]);
+      expect(runtime.servers).toEqual([
+        { name: "remote", transport: "http", serverVersion: { name: "sutra-http-mcp", version: "0.1.0" }, toolCount: 1 },
+      ]);
+      const tool = runtime.tools[0]!;
+      expect(tool.name).toBe("mcp_remote_echo_http");
+      const res = await tool.execute(tool.schema.parse({ text: "hello" }), toolContext(tempDir("sutra-mcp-ws-")));
+      expect(res).toMatchObject({ ok: true, output: "http:hello" });
+      expect(server.seenAuth).toContain(`Bearer ${TOKEN}`);
+    } finally {
+      await runtime.close();
+      await server.close();
+    }
+  });
+});
+
+describe("MCP runtime behavior", () => {
+  it("refuses MCP calls in plan mode without prompting", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ id: "m1", name: "mcp_echo_echo", args: { text: "nope" } }] },
+      { content: "planned" },
+    ]);
+    const cfg = testConfig({ mcpServers: mcpConfig.mcpServers });
+    const tools = createDefaultRegistry();
+    for (const tool of mcp.tools) tools.register(tool);
+    h = createHarness({ provider, config: cfg, tools, extraSecrets: collectMcpSecrets(mcpConfig) });
+
+    const result = await h.session.runtime.runTurn("plan it", undefined, { mode: "plan" });
+    expect(result.status).toBe("completed");
+    expect(h.approvals).toHaveLength(0);
+    const toolMessages = h.session.context.messages().filter((m) => m.role === "tool");
+    expect(toolMessages[0]!.content).toContain("Plan mode");
+  });
+
+  it("redacts MCP secrets from events and persisted invocations", async () => {
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ id: "m1", name: "mcp_echo_echo", args: { text: `arg ${TOKEN}` } }] },
+      { content: "done" },
+    ]);
+    const cfg = testConfig({ mcpServers: mcpConfig.mcpServers });
+    const tools = createDefaultRegistry();
+    for (const tool of mcp.tools) tools.register(tool);
+    h = createHarness({ provider, config: cfg, tools, extraSecrets: collectMcpSecrets(mcpConfig), approve: () => "once" });
+
+    await h.session.runtime.runTurn("leak check");
+    const invocations = h.store.listToolInvocations(h.session.record.id);
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]!.arguments).not.toContain(TOKEN);
+    expect(invocations[0]!.arguments).toContain("[redacted-secret]");
+    expect(invocations[0]!.output).not.toContain(TOKEN);
+    for (const event of h.events) expect(JSON.stringify(event)).not.toContain(TOKEN);
   });
 });

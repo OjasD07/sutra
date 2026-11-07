@@ -2,7 +2,7 @@ import { paths } from "../config/paths.js";
 import { loadConfig } from "../config/load.js";
 import { openSession } from "../core/session.js";
 import { setLanguage, t } from "../i18n/index.js";
-import { collectMcpSecrets, connectMcpServers } from "../mcp/client.js";
+import { collectMcpSecrets, connectMcpServers, type McpRuntime } from "../mcp/client.js";
 import { SessionStore } from "../memory/store.js";
 import { canonicalize } from "../permissions/paths.js";
 import { createProvider, providerNeedsKey } from "../providers/registry.js";
@@ -127,10 +127,14 @@ export async function main(argv: string[]): Promise<number> {
   // MCP discovery is asynchronous, while openSession is synchronous: connect
   // once for the process and hand the same registry to every session. Bench and
   // audit runs deliberately stay isolated from user-configured MCP servers.
-  const mcp = await connectMcpServers(config, workspaceRoot, {
-    reservedNames: createDefaultRegistry().list().map((t) => t.name),
-  });
-  const mcpSecrets = collectMcpSecrets(config);
+  // Non-interactive runs deny every approval, so starting servers there would
+  // only spawn processes that can never be called.
+  const mcp: McpRuntime = interactive
+    ? await connectMcpServers(config, workspaceRoot, {
+        reservedNames: createDefaultRegistry().list().map((t) => t.name),
+      })
+    : { tools: [], servers: [], warnings: [], close: async () => {} };
+  const mcpSecrets = interactive ? collectMcpSecrets(config) : [];
   const tools = createDefaultRegistry();
   for (const tool of mcp.tools) tools.register(tool);
   const mcpWarnings = mcp.warnings;

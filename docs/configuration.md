@@ -239,7 +239,7 @@ Sutra connects to all enabled servers at startup and discovers their tools befor
 
 Each tool appears as `mcp_<server>_<tool>` and keeps the server's JSON input schema, so the model sees the same contract the server publishes. Tool names are sanitized to `[A-Za-z0-9_-]`, truncated to 64 characters, and disambiguated if two remote names collide.
 
-**Permissions.** MCP tools are always treated as potentially unsafe: the harness cannot know whether a remote tool only reads data. In `confirm` and `flow` every call asks first; in `inspect` MCP servers are not started and their tools are hidden; in plan mode calls are refused until you approve the plan. There is no "allow for this session" shortcut. Non-interactive runs (`sutra -p`) deny approvals, so they cannot call MCP tools.
+**Permissions.** MCP tools are always treated as potentially unsafe: the harness cannot know whether a remote tool only reads data. In `confirm` and `flow` every call asks first; in `inspect` MCP servers are not started and their tools are hidden; in plan mode calls are refused until you approve the plan. There is no "allow for this session" shortcut. Non-interactive runs (`sutra -p`) do not start MCP servers and deny approvals, so they cannot call MCP tools.
 
 **Secrets.** stdio servers receive only `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LOGNAME`, the variables you list in `inheritEnv`, and `env`. They do not inherit your shell's API keys. Values from `env`, inherited variables and `headers` are redacted from tool output, the UI, logs and the database. A stdio server is a normal process running as your user and is **not** covered by the command sandbox; only configure servers you trust. See [security.md](security.md#mcp-servers).
 
